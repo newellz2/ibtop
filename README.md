@@ -1,6 +1,9 @@
 # ibtop
 
-A CLI application for watching fabric throughput, congestions and errors.
+A CLI application for watching fabric throughput, congestion, and errors.
+
+![image](https://github.com/user-attachments/assets/26ff51a4-d8c0-4b49-828d-b686f80fda39)
+
 
 ## License
 
