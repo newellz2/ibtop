@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::mpsc::{Receiver, Sender}};
+use std::{
+    collections::HashMap,
+    sync::mpsc::{Receiver, Sender},
+    time::Instant,
+};
 
 use crate::app::AppConfig;
 
@@ -85,28 +89,19 @@ impl TestDiscoverService {
 
 impl DiscoverService for TestDiscoverService{
     fn get_nodes(&self) -> Vec<Node> {
-        let nodes = vec![
-            Node{
-                guid: 0x1,
-                node_description: "switch-1".to_string(),
-                ports: 64,
-                lid: 17,
-            },
-            Node{
-                guid: 0x2,
-                node_description: "switch-2".to_string(),
-                ports: 64,
-                lid: 18,
-            },
-            Node{
-                guid: 0x3,
-                node_description: "switch-3".to_string(),
-                ports: 64,
-                lid: 19,
-            }
-        ];
+        let mut nodes = Vec::new();
 
-        return nodes;
+        // Create a handful of switches with sequential LIDs.
+        for i in 1..=8 {
+            nodes.push(Node {
+                guid: i as u64,
+                node_description: format!("switch-{i}"),
+                ports: 64,
+                lid: 16 + i as u16,
+            });
+        }
+
+        nodes
     }
 }
 
@@ -114,6 +109,7 @@ impl DiscoverService for TestDiscoverService{
 pub struct TestCountersService {
     ev_ctr_rx: Receiver<CounterEvent>,
     ctr_ev_tx: Sender<CounterEvent>,
+    start: Instant,
 }
 
 impl TestCountersService {
@@ -123,9 +119,10 @@ impl TestCountersService {
         _config: AppConfig
     ) -> Self {
 
-        Self{
+        Self {
             ev_ctr_rx,
             ctr_ev_tx,
+            start: Instant::now(),
         }
     }
     pub fn run(self)  -> color_eyre::Result<()> {
@@ -159,12 +156,18 @@ impl CountersService for TestCountersService{
 
         let mut counters: HashMap<u16, HashMap<String, u64>> = HashMap::new();
 
+        // Calculate a base value using the elapsed time since service start.
+        let elapsed = self.start.elapsed().as_secs();
+
         for n in &nodes {
             let mut node_counters: HashMap<String, u64> = HashMap::new();
 
-            node_counters.insert("port_xmit_data".to_string(), 1000);
-            node_counters.insert("port_recv_data".to_string(), 1000);
-            node_counters.insert("port_xmit_waits".to_string(), 1000);
+            // Simple algorithm to generate steadily increasing counters
+            let base = elapsed * 1000 + n.lid as u64 * 10;
+
+            node_counters.insert("port_xmit_data".to_string(), base);
+            node_counters.insert("port_recv_data".to_string(), base / 2);
+            node_counters.insert("port_xmit_waits".to_string(), elapsed + n.lid as u64);
 
             counters.insert(n.lid, node_counters);
         }
