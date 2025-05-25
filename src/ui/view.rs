@@ -283,13 +283,7 @@ impl App {
         // Right Footer
         let right_footer_block = Block::new().border_type(BorderType::Plain).borders(Borders::TOP);
         let right_footer_text = vec![
-            Line::from(
-                if self.sort_column == -1 {
-                    " s = Sort".green()
-                } else {
-                    " s = Sort".yellow()
-                }
-            ),
+            Line::from(" s = Sort".green()),
             Line::from(" S = Sort Asc/Desc".green()),
         ];
         Paragraph::new(right_footer_text)

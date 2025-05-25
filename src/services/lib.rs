@@ -2,7 +2,7 @@ use std::{
     collections::HashMap, sync::mpsc::{Receiver, Sender}, thread, time::{Duration, Instant}
 };
 
-use chrono::{Timelike, Utc};
+use chrono::Utc;
 
 use crate::app::AppConfig;
 
