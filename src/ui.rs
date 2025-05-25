@@ -7,7 +7,8 @@ use ratatui::{
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, Paragraph, Widget, Table, Row, Cell
+        Block, BorderType, Borders, Paragraph, Widget, Table, Row, Cell,
+        Clear
     },
 };
 
@@ -390,7 +391,13 @@ impl App {
         // Right Footer
         let right_footer_block = Block::new().border_type(BorderType::Plain).borders(Borders::TOP);
         let right_footer_text = vec![
-            Line::from(" s = Sort".green()),
+            Line::from(
+                if self.sort_column == -1 {
+                    " s = Sort".green()
+                } else {
+                    " s = Sort".yellow()
+                }
+            ),
             Line::from(" S = Sort Asc/Desc".green()),
         ];
         Paragraph::new(right_footer_text)
@@ -414,12 +421,16 @@ impl App {
         ];
 
         if let Some(ctrs) = counters {
-            for (k, v) in ctrs {
+            let mut ctrs_sorted: Vec<_> = ctrs.iter().collect();
+            ctrs_sorted.sort_by_key(|&(k, _)| k);
+
+            for (k, v) in ctrs_sorted {
                 lines.push(Line::from(format!("{k}: {v}")));
             }
         }
 
         let popup_area = centered_rect(60, 60, area);
+        Clear.render(popup_area, buf);
         Paragraph::new(lines)
             .block(Block::new().title("Node Details")
             .borders(Borders::ALL))
