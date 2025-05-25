@@ -165,7 +165,9 @@ impl App {
             Line::from("ibtop".green()),
             Line::from(vec![
                 Span::from("HCA:    ".green()),
-                Span::from("mlx5_0"), // Replace with your dynamic data if available
+                Span::from(
+                    &self.config.hca
+                ),
             ]),
             Line::from(vec![
                 Span::from("Status: ".green()),
