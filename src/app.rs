@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap};
+use std::{cmp::Ordering, collections::HashMap, cell::Cell};
 
 use chrono::{DateTime, Utc};
 use config::Config;
@@ -58,6 +58,15 @@ pub struct App {
     /// Current scroll offset for the nodes table
     pub table_offset: usize,
 
+    /// Number of visible rows in the table (set during rendering)
+    pub visible_rows: Cell<usize>,
+
+    /// Currently selected table row
+    pub selected: usize,
+
+    /// Show popup with node details
+    pub show_popup: bool,
+
     /// Manages all event handling (tick, crossterm, discovery, counters).
     pub events: EventHandler,
 }
@@ -113,6 +122,9 @@ impl App {
             sort_column: -1,
             sort_ascending: false,
             table_offset: 0,
+            visible_rows: Cell::new(0),
+            selected: 0,
+            show_popup: false,
             events: EventHandler::new(app_config),
         };
 
@@ -170,6 +182,17 @@ impl App {
 
     // Handle keyboard inputs.
     fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+        if self.show_popup {
+            match key_event {
+                KeyEvent { code: KeyCode::Esc, .. }
+                | KeyEvent { code: KeyCode::Enter, .. } => {
+                    self.show_popup = false;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
         match key_event {
             // Quit keys: ESC, 'q', or Ctrl-C
             KeyEvent {
@@ -254,23 +277,46 @@ impl App {
                 self.sort_ascending = !self.sort_ascending;
             }
 
-            // Scroll table down
+            // Move selection down
             KeyEvent {
                 code: KeyCode::Down,
                 ..
             } => {
                 if !self.nodes.is_empty() {
-                    let max_offset = self.nodes.len().saturating_sub(1);
-                    self.table_offset = (self.table_offset + 1).min(max_offset);
+                    let max_idx = self.nodes.len().saturating_sub(1);
+                    self.selected = (self.selected + 1).min(max_idx);
+
+                    let vis = self.visible_rows.get().max(1);
+                    let max_offset = self.nodes.len().saturating_sub(vis);
+                    if self.selected >= self.table_offset + vis {
+                        self.table_offset = (self.table_offset + 1).min(max_offset);
+                    }
                 }
             }
 
-            // Scroll table up
+            // Move selection up
             KeyEvent {
                 code: KeyCode::Up,
                 ..
             } => {
-                self.table_offset = self.table_offset.saturating_sub(1);
+                if !self.nodes.is_empty() {
+                    if self.selected > 0 {
+                        self.selected -= 1;
+                    }
+                    if self.selected < self.table_offset {
+                        self.table_offset = self.table_offset.saturating_sub(1);
+                    }
+                }
+            }
+
+            // Show popup
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => {
+                if !self.nodes.is_empty() {
+                    self.show_popup = true;
+                }
             }
 
             _ => {}

@@ -36,6 +36,14 @@ fn compute_column_widths(total_width: u16, ratios: &[f64]) -> Vec<usize> {
     widths
 }
 
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_width = r.width * percent_x / 100;
+    let popup_height = r.height * percent_y / 100;
+    let x = r.x + (r.width.saturating_sub(popup_width)) / 2;
+    let y = r.y + (r.height.saturating_sub(popup_height)) / 2;
+    Rect::new(x, y, popup_width, popup_height)
+}
+
 
 
 // Compute receive/send bandwidth in GB/s based on a performance counter.
@@ -132,6 +140,10 @@ impl Widget for &App {
 
         // Render the footer
         self.render_footer(layout[2], buf);
+
+        if self.show_popup {
+            self.render_popup(area, buf);
+        }
     }
 }
 
@@ -289,14 +301,16 @@ impl App {
         );
 
         let visible_rows = area.height.saturating_sub(1) as usize;
+        self.visible_rows.set(visible_rows);
         let offset = self.table_offset.min(node_info.len().saturating_sub(visible_rows));
 
         let rows = node_info
             .iter()
+            .enumerate()
             .skip(offset)
             .take(visible_rows)
-            .map(|(lid, desc, ports, r_bw, x_bw, waits, errs, err_str)| {
-                Row::new(vec![
+            .map(|(idx, (lid, desc, ports, r_bw, x_bw, waits, errs, err_str))| {
+                let mut row = Row::new(vec![
                     Cell::from(format!("{}", lid)),
                     Cell::from(truncate_fit(desc, widths[1])),
                     Cell::from(format!("{}", ports)),
@@ -305,7 +319,11 @@ impl App {
                     Cell::from(format!("{:.2}", waits)),
                     Cell::from(format!("{}", errs)),
                     Cell::from(truncate_fit(err_str, widths[7])),
-                ])
+                ]);
+                if self.selected == idx {
+                    row = row.style(Style::default().bg(Color::Blue));
+                }
+                row
             });
 
         let constraints = [
@@ -370,6 +388,33 @@ impl App {
         Paragraph::new(right_footer_text)
             .block(right_footer_block)
             .render(footer_layout[2], buf);
+    }
+
+    fn render_popup(&self, area: Rect, buf: &mut Buffer) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let idx = self.selected.min(self.nodes.len() - 1);
+        let node = &self.nodes[idx];
+        let counters = self.display_counters.get(&node.lid);
+
+        let mut lines = vec![
+            Line::from(format!("Node: {}", node.node_description)),
+            Line::from(format!("GUID: {:#x}", node.guid)),
+            Line::from(format!("LID: {}", node.lid)),
+            Line::from(format!("Ports: {}", node.ports)),
+        ];
+
+        if let Some(ctrs) = counters {
+            for (k, v) in ctrs {
+                lines.push(Line::from(format!("{k}: {v}")));
+            }
+        }
+
+        let popup_area = centered_rect(60, 60, area);
+        Paragraph::new(lines)
+            .block(Block::new().title("Node Details").borders(Borders::ALL))
+            .render(popup_area, buf);
     }
     
 }
