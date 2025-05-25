@@ -1,122 +1,14 @@
-use std::collections::HashMap;
-
 use chrono::prelude::*;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Borders, Paragraph, Widget, Table, Row, Cell,
-        Clear
-    },
+    widgets::{Block, BorderType, Borders, Paragraph, Widget, Table, Row, Cell, Clear},
 };
 
-use crate::{app::{App, CounterMode}, services};
-
-fn truncate_fit(s: &str, max_width: usize) -> String {
-    if s.len() > max_width {
-        let mut truncated = s[..(max_width.saturating_sub(1))].to_string();
-        truncated.push('…');
-        truncated
-    } else {
-        s.to_string()
-    }
-}
-
-
-// Calc columns widths
-fn compute_column_widths(total_width: u16, ratios: &[f64]) -> Vec<usize> {
-    let total = total_width as f64;
-    let mut widths = Vec::with_capacity(ratios.len());
-    for &ratio in ratios {
-        // At least 2 to avoid zero-width columns.
-        let col_width = (ratio * total).round().max(2.0) as usize;
-        widths.push(col_width);
-    }
-    widths
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_width = r.width * percent_x / 100;
-    let popup_height = r.height * percent_y / 100;
-    let x = r.x + (r.width.saturating_sub(popup_width)) / 2;
-    let y = r.y + (r.height.saturating_sub(popup_height)) / 2;
-    Rect::new(x, y, popup_width, popup_height)
-}
-
-
-
-// Compute receive/send bandwidth in GB/s based on a performance counter.
-pub fn get_bw(perfcounters: &HashMap<String, u64>, counter: &str, counter_mode: &CounterMode) -> f64 {
-
-    let mut time_delta = *perfcounters.get("end_timestamp").unwrap_or(&1) as f64;
-
-    match counter_mode {
-        CounterMode::Delta => {
-            time_delta = time_delta / 1e9;
-        },
-        _ => {
-            time_delta = 1.0;
-        }
-    }
-
-    perfcounters
-        .get(counter)
-        .map(|&val| {
-            (val as f64 * 4.0 / (1e9) * 8.0) / time_delta
-            //time_delta
-        }).unwrap_or(0.0)
-}
-
-// Compute bandwidth loss in GB/s based on a performance counter.
-pub fn get_bw_loss(perfcounters: &HashMap<String, u64>, counter: &str, counter_mode: &CounterMode) -> f64 {
-
-
-    let mut time_delta = *perfcounters.get("end_timestamp").unwrap_or(&1) as f64;
-
-    match counter_mode {
-        CounterMode::Delta => {
-            time_delta = time_delta / 1e9;
-        },
-        _ => {
-            time_delta = 1.0;
-        }
-    }
-
-    perfcounters
-        .get(counter)
-        .map(|&val| { 
-            val as f64 * 64.0 / (1e9)  / time_delta
-        })
-        .unwrap_or(0.0)
-}
-
-// Count all error counters and return the sum.
-pub fn count_errors(perfcounters: &HashMap<String, u64>) -> u128 {
-    services::rsmad_services::ERROR_COUNTERS
-        .iter()
-        .filter_map(|&err_ctr| perfcounters.get(err_ctr))
-        .map(|&val| val as u128)
-        .sum()
-}
-
-// Get Error Strings
-pub fn get_error_strings(perfcounters: &HashMap<String, u64>) -> String {
-    let errors: Vec<String> = services::rsmad_services::ERROR_COUNTERS
-        .iter()
-        .filter_map(|&err_ctr| {
-            perfcounters.get_key_value(err_ctr)
-        })
-        .filter(|e| {
-            *e.1 > 0
-        })
-        .map(|e|{
-            e.0.to_string()
-        }).collect();
-
-        errors.join(",")
-}
+use crate::app::App;
+use super::helpers::{truncate_fit, compute_column_widths, centered_rect, get_bw, get_bw_loss, count_errors, get_error_strings};
 
 impl Widget for &App {
     // Renders the user interface widgets.
