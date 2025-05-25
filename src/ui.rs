@@ -288,18 +288,25 @@ impl App {
                 .add_modifier(Modifier::BOLD),
         );
 
-        let rows = node_info.iter().map(|(lid, desc, ports, r_bw, x_bw, waits, errs, err_str)| {
-            Row::new(vec![
-                Cell::from(format!("{}", lid)),
-                Cell::from(truncate_fit(desc, widths[1])),
-                Cell::from(format!("{}", ports)),
-                Cell::from(format!("{:.2}", r_bw)),
-                Cell::from(format!("{:.2}", x_bw)),
-                Cell::from(format!("{:.2}", waits)),
-                Cell::from(format!("{}", errs)),
-                Cell::from(truncate_fit(err_str, widths[7])),
-            ])
-        });
+        let visible_rows = area.height.saturating_sub(1) as usize;
+        let offset = self.table_offset.min(node_info.len().saturating_sub(visible_rows));
+
+        let rows = node_info
+            .iter()
+            .skip(offset)
+            .take(visible_rows)
+            .map(|(lid, desc, ports, r_bw, x_bw, waits, errs, err_str)| {
+                Row::new(vec![
+                    Cell::from(format!("{}", lid)),
+                    Cell::from(truncate_fit(desc, widths[1])),
+                    Cell::from(format!("{}", ports)),
+                    Cell::from(format!("{:.2}", r_bw)),
+                    Cell::from(format!("{:.2}", x_bw)),
+                    Cell::from(format!("{:.2}", waits)),
+                    Cell::from(format!("{}", errs)),
+                    Cell::from(truncate_fit(err_str, widths[7])),
+                ])
+            });
 
         let constraints = [
             Constraint::Length(widths[0] as u16),

@@ -55,6 +55,9 @@ pub struct App {
     pub sort_column: i32,
     pub sort_ascending: bool,
 
+    /// Current scroll offset for the nodes table
+    pub table_offset: usize,
+
     /// Manages all event handling (tick, crossterm, discovery, counters).
     pub events: EventHandler,
 }
@@ -109,6 +112,7 @@ impl App {
             auto_update_counter: 0,
             sort_column: -1,
             sort_ascending: false,
+            table_offset: 0,
             events: EventHandler::new(app_config),
         };
 
@@ -248,6 +252,25 @@ impl App {
                 ..
             } => {
                 self.sort_ascending = !self.sort_ascending;
+            }
+
+            // Scroll table down
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            } => {
+                if !self.nodes.is_empty() {
+                    let max_offset = self.nodes.len().saturating_sub(1);
+                    self.table_offset = (self.table_offset + 1).min(max_offset);
+                }
+            }
+
+            // Scroll table up
+            KeyEvent {
+                code: KeyCode::Up,
+                ..
+            } => {
+                self.table_offset = self.table_offset.saturating_sub(1);
             }
 
             _ => {}
