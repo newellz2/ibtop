@@ -312,9 +312,8 @@ impl App {
             Constraint::Length(widths[7] as u16),
         ];
 
-        Table::new(rows)
+        Table::new(rows, constraints)
             .header(header)
-            .widths(&constraints)
             .render(area, buf);
 
     }
