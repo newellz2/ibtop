@@ -367,7 +367,13 @@ impl App {
         // Middle Footer
         let mid_footer_block = Block::new().border_type(BorderType::Plain).borders(Borders::TOP);
         let mid_footer_text = vec![
-            Line::from(" U = Auto Update".green()),
+            Line::from(
+                if self.auto_update {
+                    " U = Auto Update".yellow()
+                } else {
+                    " U = Auto Update".green()
+                }
+            ),
             Line::from(vec![
                 Span::from(
                     format!(" W/D/B = Whole/Delta/Baseline: ").green()
@@ -415,7 +421,8 @@ impl App {
 
         let popup_area = centered_rect(60, 60, area);
         Paragraph::new(lines)
-            .block(Block::new().title("Node Details").borders(Borders::ALL))
+            .block(Block::new().title("Node Details")
+            .borders(Borders::ALL))
             .render(popup_area, buf);
     }
     
