@@ -2,8 +2,13 @@ use std::collections::HashMap;
 
 use chrono::prelude::*;
 use ratatui::{
-    buffer::Buffer, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style, Stylize}, 
-    text::{Line, Span}, widgets::{Block, BorderType, Borders, Paragraph, Widget}
+    buffer::Buffer,
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Modifier, Style, Stylize},
+    text::{Line, Span},
+    widgets::{
+        Block, BorderType, Borders, Paragraph, Widget, Table, Row, Cell
+    },
 };
 
 use crate::{app::{App, CounterMode}, services};
@@ -31,62 +36,6 @@ fn compute_column_widths(total_width: u16, ratios: &[f64]) -> Vec<usize> {
     widths
 }
 
-fn format_node_line(
-    widths: &[usize],
-    lid: u16,
-    node: &str,
-    ports: u16,
-    recv_bw: f64,
-    xmt_bw: f64,
-    xmit_waits: f64,
-    errors: u128,
-    errors_string: &str,
-) -> String {
-
-    format!(
-        "{:<w0$}{:<w1$}{:<w2$}{:<w3$}{:<w4$}{:<w5$}{:<w6$}{:<w7$}",
-        format!("{}", lid),
-        truncate_fit(node, widths[1]),
-        format!("{}", ports),
-        format!("{:.2}", recv_bw),
-        format!("{:.2}", xmt_bw),
-        format!("{:.2}", xmit_waits),
-        format!("{}", errors),
-        truncate_fit(errors_string, widths[7]),
-        w0 = widths[0],
-        w1 = widths[1],
-        w2 = widths[2],
-        w3 = widths[3],
-        w4 = widths[4],
-        w5 = widths[5],
-        w6 = widths[6],
-        w7 = widths[7],
-    )
-}
-
-fn format_header_line(widths: &[usize], sort_indicators: &[&str]) -> String {
-    // Ensure you have 7 columns, 7 sort indicators, etc.
-    // The concept is the same: each column is allocated a chunk from `widths`.
-    format!(
-        "{:<w0$}{:<w1$}{:<w2$}{:<w3$}{:<w4$}{:<w5$}{:<w6$}{:<w7$}",
-        format!("LID{}", sort_indicators[0]),
-        format!("NODE{}", sort_indicators[1]),
-        format!("PT{}", sort_indicators[2]),
-        format!("RECV_BW{}", sort_indicators[3]),
-        format!("SEND_BW{}", sort_indicators[4]),
-        format!("BW_LOSS{}", sort_indicators[5]),
-        format!("ERR_CNT{}", sort_indicators[6]),
-        format!("ERR_STR{}", sort_indicators[7]),
-        w0 = widths[0],
-        w1 = widths[1],
-        w2 = widths[2],
-        w3 = widths[3],
-        w4 = widths[4],
-        w5 = widths[5],
-        w6 = widths[6],
-        w7 = widths[7],
-    )
-}
 
 
 // Compute receive/send bandwidth in GB/s based on a performance counter.
@@ -265,12 +214,6 @@ impl App {
     fn render_nodes_table(&self, area: Rect, buf: &mut Buffer) {
 
 
-        let node_table_layout = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .split(area);
-
         // Gather node information
         let mut node_info: Vec<(u16, String, u16, f64, f64, f64, u128, String)> = self
             .nodes
@@ -322,56 +265,57 @@ impl App {
             }
         });
 
-        let nt_header = Block::new().style(
+        let available_width = area.width;
+
+        let column_ratios = [0.05, 0.20, 0.05, 0.14, 0.14, 0.14, 0.14, 0.14];
+        let widths = compute_column_widths(available_width, &column_ratios);
+
+        let header_cells = vec![
+            Cell::from(format!("LID{}", self.get_sort_indicator(0))),
+            Cell::from(format!("NODE{}", self.get_sort_indicator(1))),
+            Cell::from(format!("PT{}", self.get_sort_indicator(2))),
+            Cell::from(format!("RECV_BW{}", self.get_sort_indicator(3))),
+            Cell::from(format!("SEND_BW{}", self.get_sort_indicator(4))),
+            Cell::from(format!("BW_LOSS{}", self.get_sort_indicator(5))),
+            Cell::from(format!("ERR_CNT{}", self.get_sort_indicator(6))),
+            Cell::from(format!("ERR_STR{}", self.get_sort_indicator(7))),
+        ];
+
+        let header = Row::new(header_cells).style(
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::White)
                 .add_modifier(Modifier::BOLD),
         );
-        let nt_info = Block::new();
 
-        let available_width = node_table_layout[1].width;
+        let rows = node_info.iter().map(|(lid, desc, ports, r_bw, x_bw, waits, errs, err_str)| {
+            Row::new(vec![
+                Cell::from(format!("{}", lid)),
+                Cell::from(truncate_fit(desc, widths[1])),
+                Cell::from(format!("{}", ports)),
+                Cell::from(format!("{:.2}", r_bw)),
+                Cell::from(format!("{:.2}", x_bw)),
+                Cell::from(format!("{:.2}", waits)),
+                Cell::from(format!("{}", errs)),
+                Cell::from(truncate_fit(err_str, widths[7])),
+            ])
+        });
 
-        let column_ratios = [0.05, 0.20, 0.05, 0.14, 0.14, 0.14, 0.14, 0.14];
-        let widths = compute_column_widths(available_width, &column_ratios);
+        let constraints = [
+            Constraint::Length(widths[0] as u16),
+            Constraint::Length(widths[1] as u16),
+            Constraint::Length(widths[2] as u16),
+            Constraint::Length(widths[3] as u16),
+            Constraint::Length(widths[4] as u16),
+            Constraint::Length(widths[5] as u16),
+            Constraint::Length(widths[6] as u16),
+            Constraint::Length(widths[7] as u16),
+        ];
 
-        // Create lines
-        let node_lines: Vec<Line<'_>> = node_info
-            .iter()
-            .map(|(lid, desc, ports, r_bw, x_bw, waits, errs, err_str)| {
-                let line_str = format_node_line(
-                    &widths,
-                    *lid,
-                    desc,
-                    *ports,
-                    *r_bw,
-                    *x_bw,
-                    *waits,
-                    *errs,
-                    err_str,
-                );
-                Line::from(Span::raw(line_str))
-            })
-            .collect();
-
-        // Header row
-        let header_line_str = format_header_line(
-            &widths,
-            &[
-                self.get_sort_indicator(0),
-                self.get_sort_indicator(1),
-                self.get_sort_indicator(2),
-                self.get_sort_indicator(3),
-                self.get_sort_indicator(4),
-                self.get_sort_indicator(5),
-                self.get_sort_indicator(6),
-                self.get_sort_indicator(7),
-            ],
-        );
-        let header_line = Line::from(Span::from(header_line_str));
-
-        Paragraph::new(header_line).block(nt_header).render(node_table_layout[0], buf);
-        Paragraph::new(node_lines).block(nt_info).render(node_table_layout[1], buf);
+        Table::new(rows)
+            .header(header)
+            .widths(&constraints)
+            .render(area, buf);
 
     }
 
