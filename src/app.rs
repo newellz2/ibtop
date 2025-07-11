@@ -3,13 +3,11 @@ use std::{cmp::Ordering, collections::HashMap, cell::Cell};
 use chrono::{DateTime, Utc};
 use config::Config;
 use ratatui::{
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    DefaultTerminal,
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers}, layout::{Offset, Rect}, DefaultTerminal, Terminal
 };
 
 use crate::{
-    event::{AppEvent, Event, EventHandler},
-    services::lib::{CounterEvent, DiscoveryEvent, Node}, Args,
+    event::{AppEvent, Event, EventHandler}, services::lib::{CounterEvent, DiscoveryEvent, Node}, ui::{forms::StringField, helpers::centered_rect}, Args
 };
 
 #[derive(Debug)]
@@ -54,6 +52,11 @@ pub struct App {
 
     pub sort_column: i32,
     pub sort_ascending: bool,
+
+    pub popup_rect: Rect,
+
+    /// Search field for filtering results
+    pub search_field: StringField,
 
     /// Current scroll offset for the nodes table
     pub table_offset: usize,
@@ -105,6 +108,8 @@ impl App {
             config: app_config.clone(),
             running: true,
             status: "".into(),
+            search_field: StringField::new("Search"),
+            popup_rect:  Rect::new(0, 0, 0, 0),
             nodes: Vec::new(),
 
             display_counters: HashMap::new(),
@@ -135,8 +140,28 @@ impl App {
     /// Run the application, drawing the UI and handling events until it is no longer `running`.
     pub fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
         while self.running {
+
+            if self.show_popup {
+                let _ = terminal.show_cursor();
+            } else {
+                let _ = terminal.hide_cursor();
+            }
+            
             // Render the UI
-            terminal.draw(|frame| frame.render_widget(&self, frame.area()))?;
+            terminal.draw(|frame| {
+                let area = frame.area();
+
+                if self.show_popup {
+                    let centered_rect = centered_rect(60, 3, area);
+                    let offset = Offset{
+                        x: (centered_rect.0 as i32 + self.search_field.cursor_offset().x).into(),
+                        y: (centered_rect.1 + 1).into(),
+                    };
+                    let cursor_offset = area.offset(offset);
+                    frame.set_cursor_position(cursor_offset);
+                }
+                frame.render_widget(&self, area);
+            })?;
 
             // Process the next event
             self.handle_events()?;
@@ -182,13 +207,18 @@ impl App {
 
     // Handle keyboard inputs.
     fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+
+        // Handling for the search popup
         if self.show_popup {
             match key_event {
+
                 KeyEvent { code: KeyCode::Esc, .. }
                 | KeyEvent { code: KeyCode::Enter, .. } => {
                     self.show_popup = false;
                 }
-                _ => {}
+
+                // Other key presses go to the search field
+                _ => self.search_field.on_key_press(key_event),
             }
             return Ok(());
         }
@@ -237,7 +267,7 @@ impl App {
                 self.auto_update = !self.auto_update;
             }
 
-            // Delta Counters
+            // Whole Counters
             KeyEvent {
                 code: KeyCode::Char('W'),
                 ..
@@ -253,7 +283,7 @@ impl App {
                 self.counter_mode = CounterMode::Delta;
             }
 
-            // Delta Counters
+            // Baseline Counters
             KeyEvent {
                 code: KeyCode::Char('B'),
                 ..
@@ -316,6 +346,10 @@ impl App {
             } => {
                 if !self.nodes.is_empty() {
                     self.show_popup = true;
+                    self.popup_rect.width = 10;
+                    self.popup_rect.height = 10;
+                    self.popup_rect.x = 10;
+                    self.popup_rect.y = 10;
                 }
             }
 
@@ -329,7 +363,6 @@ impl App {
         self.status = "Discovering...".into();
         self.events.send(AppEvent::Discover(DiscoveryEvent::Request));
     }
-
 
     // Update Counters
     fn update_counters(&mut self) {

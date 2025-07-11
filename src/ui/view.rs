@@ -4,11 +4,18 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Widget, Table, Row, Cell, Clear},
+    widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, Widget},
 };
 
 use crate::app::App;
-use super::helpers::{truncate_fit, compute_column_widths, centered_rect, get_bw, get_bw_loss, count_errors, get_error_strings};
+use super::helpers::{
+    truncate_fit, 
+    compute_column_widths, 
+    centered_rect, 
+    get_bw, 
+    get_bw_loss, 
+    count_errors, 
+    get_error_strings};
 
 impl Widget for &App {
     // Renders the user interface widgets.
@@ -34,6 +41,7 @@ impl Widget for &App {
         // Render the footer
         self.render_footer(layout[2], buf);
 
+        // Render popup
         if self.show_popup {
             self.render_popup(area, buf);
         }
@@ -120,11 +128,17 @@ impl App {
     /// LID, NODE, PORTS, RECV_BW, SEND_BW, BW_LOSS, ERRORS.
     fn render_nodes_table(&self, area: Rect, buf: &mut Buffer) {
 
+        let re = regex::Regex::new(&self.search_field.value).unwrap_or_else(|_| {
+            regex::Regex::new("").unwrap()
+        });
 
-        // Gather node information
+        // Filter and gather node information
         let mut node_info: Vec<(u16, String, u16, f64, f64, f64, u128, String)> = self
             .nodes
             .iter()
+            .filter(|n| {  
+                re.is_match(&n.node_description)
+            })
             .map(|n| {
                 let counters = self.display_counters.get(&n.lid);
 
@@ -174,7 +188,7 @@ impl App {
 
         let available_width = area.width;
 
-        let column_ratios = [0.05, 0.20, 0.05, 0.14, 0.14, 0.14, 0.14, 0.14];
+        let column_ratios = [0.04, 0.32, 0.04, 0.12, 0.12, 0.12, 0.12, 0.12];
         let widths = compute_column_widths(available_width, &column_ratios);
 
         let header_cells = vec![
@@ -220,6 +234,7 @@ impl App {
                 }
                 row
             });
+        
 
         let constraints = [
             Constraint::Length(widths[0] as u16),
@@ -253,6 +268,7 @@ impl App {
             Line::from(" d = Fabric Discovery".green()),
             Line::from(" u = Update Counters".green()),
         ];
+
         Paragraph::new(left_footer_text)
             .block(left_footer_block)
             .render(footer_layout[0], buf);
@@ -276,6 +292,7 @@ impl App {
                 )
             ]),
         ];
+
         Paragraph::new(mid_footer_text)
             .block(mid_footer_block)
             .render(footer_layout[1], buf);
@@ -286,41 +303,28 @@ impl App {
             Line::from(" s = Sort".green()),
             Line::from(" S = Sort Asc/Desc".green()),
         ];
+
         Paragraph::new(right_footer_text)
             .block(right_footer_block)
             .render(footer_layout[2], buf);
+
     }
 
     fn render_popup(&self, area: Rect, buf: &mut Buffer) {
         if self.nodes.is_empty() {
             return;
         }
-        let idx = self.selected.min(self.nodes.len() - 1);
-        let node = &self.nodes[idx];
-        let counters = self.display_counters.get(&node.lid);
 
-        let mut lines = vec![
-            Line::from(format!("Node: {}", node.node_description)),
-            Line::from(format!("GUID: {:#x}", node.guid)),
-            Line::from(format!("LID: {}", node.lid)),
-            Line::from(format!("Ports: {}", node.ports)),
-        ];
+        let popup_info = centered_rect(60, 3, area);
+        let rect = Rect::new(
+            popup_info.0, 
+            popup_info.1, 
+            popup_info.2, 
+            popup_info.3,
+        );
 
-        if let Some(ctrs) = counters {
-            let mut ctrs_sorted: Vec<_> = ctrs.iter().collect();
-            ctrs_sorted.sort_by_key(|&(k, _)| k);
-
-            for (k, v) in ctrs_sorted {
-                lines.push(Line::from(format!("{k}: {v}")));
-            }
-        }
-
-        let popup_area = centered_rect(60, 60, area);
-        Clear.render(popup_area, buf);
-        Paragraph::new(lines)
-            .block(Block::new().title("Node Details")
-            .borders(Borders::ALL))
-            .render(popup_area, buf);
+        Clear.render(rect, buf);
+        self.search_field.render(rect, buf);
     }
     
 }

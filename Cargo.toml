@@ -10,9 +10,10 @@ ratatui = "0.29.0"
 color-eyre = "0.6.3"
 config = "0.15.11"
 chrono = "0.4.40"
-rsmad = { path = "/root/git/rsmad" }
+rsmad = { path = "../rsmad" }
 clap = { version = "4.5.32", features = ["derive"] }
 serde_derive = "1.0"
 serde = { version = "1.0.219", features = ["derive"] }
 rayon = "1.10.0"
 gag = "1.0.0"
+regex = "1.11.1"

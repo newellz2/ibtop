@@ -7,7 +7,7 @@ use std::{
 };
 use super::lib::{CounterEvent, CountersService, DiscoverService, DiscoveryEvent, Node};
 
-pub const ERROR_COUNTERS: [&str; 12] = [
+pub const ERROR_COUNTERS: [&str; 11] = [
     "symbol_errors",
     "link_recovers",
     "link_downed",
@@ -16,7 +16,6 @@ pub const ERROR_COUNTERS: [&str; 12] = [
     "switch_rel_errors",
     "rcv_local_phy_errors",
     "rcv_malformed_pkt_errors",
-    "rcv_buffer_overrun_errors",
     "excess_overrun_errors",
     "vl15dropped",
     "qp1_drops",
@@ -77,10 +76,9 @@ impl DiscoverService for RsmadDiscoveryService {
         let mut nodes = Vec::new();
         let mut fabric = rsmad::ibnetdisc::fabric::Fabric::new(&self.config.hca);
         let discover_res = fabric.discover(
-            1,                   // ?
-
+            1,
             self.config.timeout, // timeout
-            3, 0, 0, 0, 0,       // other params?
+            3, 0, 0, 0, 0,
         );
 
         if let Err(e) = discover_res {

@@ -9,7 +9,7 @@ Use the Up and Down arrow keys to scroll through the node table when the list ex
 
 ## License
 
-Copyright (c) your name <zlantern@gmail.com>
+Copyright (c) Zach Newell <zlantern@gmail.com>
 
 This project is licensed under the MIT license ([LICENSE] or <http://opensource.org/licenses/MIT>)
 

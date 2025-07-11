@@ -25,15 +25,15 @@ pub(crate) fn compute_column_widths(total_width: u16, ratios: &[f64]) -> Vec<usi
     widths
 }
 
-pub(crate) fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+pub(crate) fn centered_rect(percent_x: u16, y_height: u16, r: Rect) -> (u16, u16, u16, u16) {
     let popup_width = r.width * percent_x / 100;
-    let popup_height = r.height * percent_y / 100;
+    let popup_height = y_height;
     let x = r.x + (r.width.saturating_sub(popup_width)) / 2;
     let y = r.y + (r.height.saturating_sub(popup_height)) / 2;
-    Rect::new(x, y, popup_width, popup_height)
+    (x, y, popup_width, popup_height)
 }
 
-/// Compute receive/send bandwidth in GB/s based on a performance counter.
+/// Compute receive/send bandwidth in Gbps based on a performance counter.
 pub(crate) fn get_bw(
     perfcounters: &HashMap<String, u64>,
     counter: &str,
@@ -52,7 +52,7 @@ pub(crate) fn get_bw(
         .unwrap_or(0.0)
 }
 
-/// Compute bandwidth loss in GB/s based on a performance counter.
+/// Compute bandwidth loss in Gbps based on a performance counter.
 pub(crate) fn get_bw_loss(
     perfcounters: &HashMap<String, u64>,
     counter: &str,
