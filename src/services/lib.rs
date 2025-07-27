@@ -1,12 +1,12 @@
 use std::{
-    collections::HashMap, sync::mpsc::{Receiver, Sender}, thread, time::{Duration, Instant}
+    collections::HashMap, 
+    sync::mpsc::{Receiver, Sender}, 
+    time::{Instant}
 };
 
 use chrono::Utc;
-
 use crate::app::AppConfig;
-
-use super::rsmad_services::ERROR_COUNTERS;
+use super::rsmad::ERROR_COUNTERS;
 
 pub enum ServiceType{
     RsMAD,
@@ -23,8 +23,8 @@ pub enum DiscoveryEvent{
 
 #[derive(Clone, Debug)]
 pub enum CounterEvent {
-    Request(Vec<Node>),
-    Response(HashMap<u16, HashMap<String, u64>>),
+    Request(Vec<LidPort>),
+    Response(HashMap<(u16, i32), HashMap<String, u64>>),
     Error,
     Exit
 }
@@ -33,8 +33,19 @@ pub enum CounterEvent {
 pub struct Node {
     pub guid: u64,
     pub node_description: String,
-    pub ports: u64,
+    pub ports: Vec<Port>,
     pub lid: u16,
+}
+
+#[derive(Clone, Debug)]
+pub struct Port {
+    pub number: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct LidPort {
+    pub lid: u16,
+    pub number: i32,
 }
 
 pub trait DiscoverService {
@@ -42,7 +53,7 @@ pub trait DiscoverService {
 }
 
 pub trait CountersService {
-    fn get_counters(&self, nodes: Vec<Node>) -> HashMap<u16, HashMap<String, u64>>;
+    fn get_counters(&self, nodes: Vec<LidPort>) -> HashMap<(u16, i32), HashMap<String, u64>>;
 }
 
 // Test services
@@ -83,7 +94,7 @@ impl TestDiscoverService {
                         _ => {},
                     }
                 }
-                Err(_) => {}
+                Err(_e) => {}
             }
         }
     }
@@ -95,10 +106,18 @@ impl DiscoverService for TestDiscoverService{
 
         // Create a handful of switches with sequential LIDs.
         for i in 1..=1600 {
+            let mut ports: Vec<Port> = Vec::new();
+            for i in 0..=64 {
+                ports.push(
+                    Port {
+                        number: i
+                    }
+                );
+            }
             nodes.push(Node {
                 guid: i as u64,
                 node_description: format!("switch-{i}"),
-                ports: 64,
+                ports: ports,
                 lid: 16 + i as u16,
             });
         }
@@ -136,61 +155,70 @@ impl TestCountersService {
                         CounterEvent::Exit => {
                             return Ok(())
                         }
-                        CounterEvent::Request(nodes) => {
+                        CounterEvent::Request(lid_ports) => {
 
                             let _ = self.ctr_ev_tx.send(
                                 CounterEvent::Response(
-                                    self.get_counters(nodes)
+                                    self.get_counters(lid_ports)
                                 )
                             );
                         },
                         _ => {},
                     }
                 }
-                Err(_) => todo!(),
+                Err(_e) => {},
             }
         }
     }
 }
 
 impl CountersService for TestCountersService{
-    fn get_counters(&self, nodes: Vec<Node>) -> HashMap<u16, HashMap<String, u64>>{
 
-        let mut counters: HashMap<u16, HashMap<String, u64>> = HashMap::new();
+    fn get_counters(&self, lid_ports: Vec<LidPort>) -> HashMap<(u16, i32), HashMap<String, u64>>{
+
+        let mut counters: HashMap<(u16, i32), HashMap<String, u64>> = HashMap::new();
 
         // Calculate a base value using the elapsed time since service start.
         let elapsed = self.start.elapsed().as_secs();
-        let start = Utc::now();
-        thread::sleep(Duration::from_secs(1));
-        let end = Utc::now();
+        let now_nanos = Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
 
+        let simulated_work_duration_nanos = 1_000_000_000; // 1s
 
-        for n in &nodes {
+        for lp in &lid_ports {
             let mut node_counters: HashMap<String, u64> = HashMap::new();
             // Simple algorithm to generate steadily increasing counters
-            let base = elapsed * 1000 + n.lid as u64 * 10;
-            node_counters.insert("xmt_bytes".to_string(), base * (1e5 as u64) * (n.lid as u64));
-            node_counters.insert("rcv_bytes".to_string(), base * (1e5 as u64) * (n.lid as u64));
-            node_counters.insert("xmit_waits".to_string(), base * (1e4 as u64) * (n.lid as u64));
+            let base = elapsed.saturating_mul(1000).saturating_add((lp.lid as i32 + lp.number) as u64 * 10);
+
+            let xmt_bytes = base.saturating_mul(100_000).saturating_mul((lp.lid as i32 + lp.number) as u64);
+            node_counters.insert("xmt_bytes".to_string(), xmt_bytes);
+
+            let rcv_bytes = base.saturating_mul(100_000).saturating_mul((lp.lid as i32 + lp.number) as u64);
+            node_counters.insert("rcv_bytes".to_string(), rcv_bytes);
+
+            let xmit_waits = base.saturating_mul(10_000).saturating_mul((lp.lid as i32 + lp.number) as u64);
+            node_counters.insert("xmit_waits".to_string(), xmit_waits);
+
             node_counters.insert(
                 "start_timestamp".to_string(),
-                start.timestamp_nanos_opt().unwrap_or(0) as u64,
+                now_nanos,
             );
             node_counters.insert(
                 "end_timestamp".to_string(),
-                end.timestamp_nanos_opt().unwrap_or(0) as u64,
+                now_nanos + simulated_work_duration_nanos,
             );
 
-            //Add ErrorCounters
+            // Add ErrorCounters
             let _: Vec<_> = ERROR_COUNTERS
                 .iter()
                 .map(|&err_ctr| {
-                    node_counters.insert(err_ctr.to_string(), base * (n.lid as u64))
+                    let err_cnt = base.saturating_mul(lp.lid as u64);
+                    node_counters.insert(err_ctr.to_string(), err_cnt);
                 }).collect();
 
-            counters.insert(n.lid, node_counters);
+            counters.insert((lp.lid, lp.number), node_counters);
         }
 
         counters
     }
+
 }

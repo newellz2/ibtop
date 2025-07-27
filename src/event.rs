@@ -8,7 +8,7 @@ use std::{
 
 use crate::{app::AppConfig, services::{
     lib::{CounterEvent, DiscoveryEvent, TestCountersService, TestDiscoverService},
-    rsmad_services::{RsmadCountersService, RsmadDiscoveryService},
+    rsmad::{RsmadCountersService, RsmadDiscoveryService},
 }};
 
 /// The frequency (in Hz) at which tick events are emitted.

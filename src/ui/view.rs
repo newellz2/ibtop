@@ -1,3 +1,4 @@
+
 use chrono::prelude::*;
 use ratatui::{
     buffer::Buffer,
@@ -7,15 +8,24 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, Widget},
 };
 
-use crate::app::App;
+use crate::{
+    app::{
+        App, 
+        Popup, 
+        DETAILS_POPUP_PERCENT_HEIGHT, 
+        DETAILS_POPUP_PERCENT_WIDTH, 
+        SEARCH_POPUP_LINES_HEIGHT, SEARCH_POPUP_PERCENT_WIDTH}
+};
 use super::helpers::{
     truncate_fit, 
     compute_column_widths, 
-    centered_rect, 
     get_bw, 
     get_bw_loss, 
     count_errors, 
-    get_error_strings};
+    get_error_strings,
+    centered_rect_percent,
+    centered_rect_percent_w_lines_h
+};
 
 impl Widget for &App {
     // Renders the user interface widgets.
@@ -42,8 +52,14 @@ impl Widget for &App {
         self.render_footer(layout[2], buf);
 
         // Render popup
-        if self.show_popup {
-            self.render_popup(area, buf);
+        match self.active_popup {
+            Popup::None => {},
+            Popup::Search => {
+                self.render_search_popup(area, buf);
+            },
+            Popup::Details => {
+                self.render_details_popup(area, buf);
+            },
         }
     }
 }
@@ -128,19 +144,19 @@ impl App {
     /// LID, NODE, PORTS, RECV_BW, SEND_BW, BW_LOSS, ERRORS.
     fn render_nodes_table(&self, area: Rect, buf: &mut Buffer) {
 
-        let re = regex::Regex::new(&self.search_field.value).unwrap_or_else(|_| {
+        let re = regex::Regex::new(&self.search_form.value).unwrap_or_else(|_| {
             regex::Regex::new("").unwrap()
         });
 
         // Filter and gather node information
-        let mut node_info: Vec<(u16, String, u16, f64, f64, f64, u128, String)> = self
+        let mut node_info: Vec<(u64, u16, String, u16, f64, f64, f64, u128, String)> = self
             .nodes
             .iter()
             .filter(|n| {  
                 re.is_match(&n.node_description)
             })
             .map(|n| {
-                let counters = self.display_counters.get(&n.lid);
+                let counters = self.display_counters.get(&(n.lid, 255));
 
                 let recv_bw = counters
                     .map_or(0.0, |ctrs| get_bw(ctrs, "rcv_bytes", &self.counter_mode));
@@ -153,9 +169,10 @@ impl App {
                 let error_strings = counters
                     .map_or("".to_string(), |ctrs| get_error_strings(ctrs));
                 (
+                    n.guid,
                     n.lid,
                     n.node_description.clone(),
-                    n.ports as u16,
+                    n.ports.len() as u16,
                     recv_bw,
                     xmt_bw,
                     xmit_waits,
@@ -168,14 +185,14 @@ impl App {
         // Sort based on `self.sort_column`
         node_info.sort_by(|a, b| {
             let ordering = match self.sort_column {
-                0 => a.0.cmp(&b.0),
                 1 => a.1.cmp(&b.1),
                 2 => a.2.cmp(&b.2),
-                3 => a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal),
+                3 => a.3.cmp(&b.3),
                 4 => a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal),
                 5 => a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal),
-                6 => a.6.cmp(&b.6),
+                6 => a.6.partial_cmp(&b.6).unwrap_or(std::cmp::Ordering::Equal),
                 7 => a.7.cmp(&b.7),
+                8 => a.8.cmp(&b.8),
                 _ => std::cmp::Ordering::Equal,
             };
 
@@ -218,7 +235,9 @@ impl App {
             .enumerate()
             .skip(offset)
             .take(visible_rows)
-            .map(|(idx, (lid, desc, ports, r_bw, x_bw, waits, errs, err_str))| {
+            .map(|(idx, (
+                    _guid, lid, desc, ports, r_bw, x_bw, waits, errs, err_str)
+                )| {
                 let mut row = Row::new(vec![
                     Cell::from(format!("{}", lid)),
                     Cell::from(truncate_fit(desc, widths[1])),
@@ -310,12 +329,17 @@ impl App {
 
     }
 
-    fn render_popup(&self, area: Rect, buf: &mut Buffer) {
+    fn render_search_popup(&self, area: Rect, buf: &mut Buffer) {
         if self.nodes.is_empty() {
             return;
         }
 
-        let popup_info = centered_rect(60, 3, area);
+        let popup_info = centered_rect_percent_w_lines_h(
+            SEARCH_POPUP_PERCENT_WIDTH,
+            SEARCH_POPUP_LINES_HEIGHT, 
+            area
+        );
+
         let rect = Rect::new(
             popup_info.0, 
             popup_info.1, 
@@ -324,7 +348,116 @@ impl App {
         );
 
         Clear.render(rect, buf);
-        self.search_field.render(rect, buf);
+        self.search_form.render(rect, buf);
     }
-    
+
+    fn render_details_popup(&self, area: Rect, buf: &mut Buffer) {
+        if self.selected_guid.is_none() {
+            return;
+        }
+
+        let popup_info = centered_rect_percent(
+            DETAILS_POPUP_PERCENT_WIDTH,
+            DETAILS_POPUP_PERCENT_HEIGHT, 
+            area
+        );
+
+        let rect = Rect::new(
+            popup_info.0, 
+            popup_info.1, 
+            popup_info.2, 
+            popup_info.3,
+        );
+
+        Clear.render(rect, buf);
+
+        let block = Block::new()
+            .title("Details")
+            .borders(Borders::ALL);
+
+        let inner_area = block.inner(rect);
+        let column_ratios = [0.0, 0.0, 0.5, 0.18, 0.18, 0.18, 0.18, 0.23];
+        let widths = compute_column_widths(inner_area.width, &column_ratios);
+
+        // Prepare node info
+        let mut node_info: Vec<(i32, f64, f64, f64, u128, String)> = self
+            .display_counters.clone()
+            .into_iter()
+            .map(|e,| {
+                let recv_bw = get_bw(&e.1, "rcv_bytes", &self.counter_mode);
+                let xmt_bw = get_bw(&e.1, "xmt_bytes", &self.counter_mode);
+                let xmit_waits = get_bw_loss(&e.1, "xmit_waits", &self.counter_mode);
+                let error_count = count_errors(&e.1);
+                let error_strings =  get_error_strings(&e.1);
+                (
+                    e.0.1,
+                    recv_bw,
+                    xmt_bw,
+                    xmit_waits,
+                    error_count,
+                    error_strings
+                )
+            })
+            .collect();
+
+        node_info.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let visible_rows = inner_area.height.saturating_sub(1) as usize;
+        self.visible_rows.set(visible_rows);
+        let offset = self.popup_table_offset.min(node_info.len().saturating_sub(visible_rows));
+
+        let rows = node_info
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(visible_rows)
+            .map(|(idx, (
+                port, r_bw, x_bw, waits, errs, err_str)
+                )| {
+                let mut row = Row::new(vec![
+                    Cell::from(format!("{}", port)),
+                    Cell::from(format!("{:.2}", r_bw)),
+                    Cell::from(format!("{:.2}", x_bw)),
+                    Cell::from(format!("{:.2}", waits)),
+                    Cell::from(format!("{}", errs)),
+                    Cell::from(truncate_fit(err_str, widths[7])),
+                ]);
+                if self.popup_selected == idx {
+                    row = row.style(Style::default().bg(Color::Blue));
+                }
+                row
+            });
+
+        let header_cells = vec![
+            Cell::from(format!("PT")),
+            Cell::from(format!("RECV_BW")),
+            Cell::from(format!("SEND_BW")),
+            Cell::from(format!("BW_LOSS")),
+            Cell::from(format!("ERR_CNT")),
+            Cell::from(format!("ERR_STR")),
+        ];
+
+        let header = Row::new(header_cells).style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        );
+
+        let constraints = [
+            Constraint::Length(widths[2] as u16),
+            Constraint::Length(widths[3] as u16),
+            Constraint::Length(widths[4] as u16),
+            Constraint::Length(widths[5] as u16),
+            Constraint::Length(widths[6] as u16),
+            Constraint::Length(widths[7] as u16),
+        ];
+
+        let table = Table::new(rows, constraints)
+            .header(header);
+
+        table.render(inner_area, buf);
+        
+        block.render(rect, buf);
+    }
 }

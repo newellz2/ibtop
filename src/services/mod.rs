@@ -1,2 +1,2 @@
 pub mod lib;
-pub mod rsmad_services;
+pub mod rsmad;

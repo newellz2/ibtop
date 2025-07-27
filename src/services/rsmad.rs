@@ -1,4 +1,4 @@
-use crate::app::AppConfig;
+use crate::{app::AppConfig, services::lib::{LidPort, Port}};
 use chrono::Utc;
 use rayon::{prelude::*, ThreadPoolBuilder};
 use std::{
@@ -77,8 +77,9 @@ impl DiscoverService for RsmadDiscoveryService {
         let mut fabric = rsmad::ibnetdisc::fabric::Fabric::new(&self.config.hca);
         let discover_res = fabric.discover(
             1,
-            self.config.timeout, // timeout
-            3, 0, 0, 0, 0,
+            self.config.timeout,
+            self.config.retries, 
+            0, 0, 0, 0,
         );
 
         if let Err(e) = discover_res {
@@ -97,31 +98,19 @@ impl DiscoverService for RsmadDiscoveryService {
                         nodes.push(Node {
                             guid: nd_ref.guid,
                             node_description: nd_ref.node_desc.clone(),
-                            ports: 1,
+                            ports: vec![],
                             lid: nd_ref.lid,
                         });
                         }
                 }
                 rsmad::ibnetdisc::node::NodeType::SWITCH => {
-                    let port_count = nd_ref
-                        .ports
-                        .as_ref()
-                        .map(|ports| {
-                            ports
-                                .iter()
-                                .filter(|p| { 
-                                    let port_ref = p.borrow();
-                                    port_ref.logical_state != 1
-                                
-                            })
-                                .count()
-                        })
-                        .unwrap_or(0);
+
+                    let ports: Vec<Port> = vec![];
 
                     nodes.push(Node {
                         guid: nd_ref.guid,
                         node_description: nd_ref.node_desc.clone(),
-                        ports: port_count as u64,
+                        ports: ports,
                         lid: nd_ref.lid,
                     });
                 }
@@ -176,7 +165,7 @@ impl RsmadCountersService {
 }
 
 impl CountersService for RsmadCountersService {
-    fn get_counters(&self, nodes: Vec<Node>) -> HashMap<u16, HashMap<String, u64>> {
+    fn get_counters(&self, lid_ports: Vec<LidPort>) -> HashMap<(u16, i32), HashMap<String, u64>> {
         rsmad::umad::umad_init();
         unsafe {
             rsmad::ibmad::sys::madrpc_show_errors(0);
@@ -198,12 +187,16 @@ impl CountersService for RsmadCountersService {
             }
         };
 
-        let counters: HashMap<u16, HashMap<String, u64>> = pool.install(|| {
-            nodes
+        let counters: HashMap<(u16, i32), HashMap<String, u64>> = pool.install(|| {
+            lid_ports
                 .par_iter()
-                .filter_map(|node| {
+                .filter_map(|lp| {
                     // Each iteration attempts to open a port
-                    let port_result = rsmad::ibmad::mad_rpc_open_port(&hca, &mgmt_classes);
+                    let port_result = rsmad::ibmad::mad_rpc_open_port(
+                        &hca, 
+                        &mgmt_classes
+                    );
+
                     let mut port = match port_result {
                         Ok(p) => p,
                         Err(_) => {
@@ -213,7 +206,7 @@ impl CountersService for RsmadCountersService {
 
                     let start = Utc::now();
                     let perfquery_res =
-                        rsmad::ibmad::perfquery(&port, node.lid.into(), 255, 0, timeout);
+                        rsmad::ibmad::perfquery(&port, lp.lid.into(), lp.number, 0, timeout);
                     let end = Utc::now();
 
                     let result = match perfquery_res {
@@ -226,7 +219,7 @@ impl CountersService for RsmadCountersService {
                                 "end_timestamp".to_string(),
                                 end.timestamp_nanos_opt().unwrap_or(0) as u64,
                             );
-                            Some((node.lid, perfctrs.counters))
+                            Some(((lp.lid, lp.number), perfctrs.counters))
                         }
                         Err(_) => {
                             None

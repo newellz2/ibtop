@@ -1,20 +1,36 @@
-use std::{cmp::Ordering, collections::HashMap, cell::Cell};
+use std::{cell::Cell, cmp::Ordering, collections::HashMap};
 
 use chrono::{DateTime, Utc};
 use config::Config;
 use ratatui::{
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers}, layout::{Offset, Rect}, DefaultTerminal, Terminal
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers}, layout::Offset, DefaultTerminal
 };
 
 use crate::{
-    event::{AppEvent, Event, EventHandler}, services::lib::{CounterEvent, DiscoveryEvent, Node}, ui::{forms::StringField, helpers::centered_rect}, Args
+    event::{AppEvent, Event, EventHandler}, services::lib::{CounterEvent, DiscoveryEvent, LidPort, Node}, 
+    ui::{forms::{NodeDetailsForm, SearchForm}, 
+    helpers::{centered_rect_percent_w_lines_h, count_errors, get_bw, get_bw_loss, get_error_strings}}, Args
 };
+
+pub const SEARCH_POPUP_PERCENT_WIDTH: u16 = 60;
+pub const SEARCH_POPUP_LINES_HEIGHT: u16 = 3;
+
+pub const DETAILS_POPUP_PERCENT_WIDTH: u16 = 90;
+pub const DETAILS_POPUP_PERCENT_HEIGHT: u16 = 80;
 
 #[derive(Debug)]
 pub enum CounterMode {
     Whole,
     Delta,
     Baseline,
+}
+
+
+#[derive(Debug, PartialEq)]
+pub enum Popup {
+    None,
+    Search,
+    Details,
 }
 
 #[derive(Debug, Default, serde_derive::Deserialize, PartialEq, Clone)]
@@ -26,6 +42,7 @@ pub struct AppConfig {
     pub update_interval: usize,
     pub include_hcas: bool,
     pub timeout: u32,
+    pub retries: u32,
 }
 
 // Main application state.
@@ -34,11 +51,14 @@ pub struct App {
     pub config: AppConfig,
     pub nodes: Vec<Node>,
 
-    // Counters
-    pub display_counters: HashMap<u16, HashMap<String, u64>>,
-    pub current_counters: HashMap<u16, HashMap<String, u64>>,
-    pub previous_counters: HashMap<u16, HashMap<String, u64>>,
-    pub baseline_counters: HashMap<u16, HashMap<String, u64>>,
+    /// Selected Node
+    pub selected_guid: Option<u64>,
+
+    /// Counters
+    pub display_counters: HashMap<(u16, i32), HashMap<String, u64>>,
+    pub current_counters: HashMap<(u16, i32), HashMap<String, u64>>,
+    pub previous_counters: HashMap<(u16, i32), HashMap<String, u64>>,
+    pub baseline_counters: HashMap<(u16, i32), HashMap<String, u64>>,
 
     pub pending_counter_update: bool,
     pub last_counter_update: Option<DateTime<Utc>>,
@@ -53,13 +73,20 @@ pub struct App {
     pub sort_column: i32,
     pub sort_ascending: bool,
 
-    pub popup_rect: Rect,
-
     /// Search field for filtering results
-    pub search_field: StringField,
+    pub search_form: SearchForm,
+
+    /// NodeDetails form
+    pub node_details_form: NodeDetailsForm,
 
     /// Current scroll offset for the nodes table
     pub table_offset: usize,
+
+    /// Popup table offset
+    pub popup_table_offset: usize,
+
+    /// Track the selected port
+    pub popup_selected: usize,
 
     /// Number of visible rows in the table (set during rendering)
     pub visible_rows: Cell<usize>,
@@ -67,15 +94,15 @@ pub struct App {
     /// Currently selected table row
     pub selected: usize,
 
-    /// Show popup with node details
-    pub show_popup: bool,
+    /// Active popup
+    pub active_popup: Popup,
 
     /// Manages all event handling (tick, crossterm, discovery, counters).
     pub events: EventHandler,
 }
 
 impl App {
-    //  constructor
+    ///  Constructor
     pub fn new(args: Args) -> Self {
         let config = Config::builder()
         .add_source(
@@ -95,6 +122,7 @@ impl App {
                 AppConfig{
                     hca: args.hca,
                     timeout: args.timeout,
+                    retries: args.retries,
                     threads: args.threads,
                     pkey: args.pkey,
                     update_interval: args.update_interval,
@@ -108,10 +136,10 @@ impl App {
             config: app_config.clone(),
             running: true,
             status: "".into(),
-            search_field: StringField::new("Search"),
-            popup_rect:  Rect::new(0, 0, 0, 0),
+            search_form: SearchForm::new("Search"),
+            node_details_form: NodeDetailsForm::new("Details"),
             nodes: Vec::new(),
-
+            selected_guid: None,
             display_counters: HashMap::new(),
             current_counters: HashMap::new(),
             previous_counters: HashMap::new(),
@@ -127,9 +155,11 @@ impl App {
             sort_column: -1,
             sort_ascending: false,
             table_offset: 0,
+            popup_table_offset: 0,
+            popup_selected: 0,
             visible_rows: Cell::new(0),
             selected: 0,
-            show_popup: false,
+            active_popup: Popup::None,
             events: EventHandler::new(app_config),
         };
 
@@ -141,25 +171,43 @@ impl App {
     pub fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
         while self.running {
 
-            if self.show_popup {
-                let _ = terminal.show_cursor();
-            } else {
-                let _ = terminal.hide_cursor();
+            match self.active_popup{
+                Popup::None => {
+                    let _ = terminal.hide_cursor();
+                },
+                Popup::Details => {
+                    let _ = terminal.hide_cursor();
+                },
+                Popup::Search => {
+                    let _ = terminal.show_cursor();
+                },
             }
-            
+
             // Render the UI
             terminal.draw(|frame| {
+
                 let area = frame.area();
 
-                if self.show_popup {
-                    let centered_rect = centered_rect(60, 3, area);
-                    let offset = Offset{
-                        x: (centered_rect.0 as i32 + self.search_field.cursor_offset().x).into(),
-                        y: (centered_rect.1 + 1).into(),
-                    };
-                    let cursor_offset = area.offset(offset);
-                    frame.set_cursor_position(cursor_offset);
+                match self.active_popup {
+
+                    Popup::Search => { // Seatrch Popup
+                        let centered_rect = centered_rect_percent_w_lines_h(
+                            SEARCH_POPUP_PERCENT_WIDTH, 
+                            SEARCH_POPUP_LINES_HEIGHT, 
+                            area
+                        );
+
+                        let offset = Offset{
+                            x: (centered_rect.0 as i32 + self.search_form.cursor_offset().x).into(),
+                            y: (centered_rect.1 + 1).into(),
+                        };
+
+                        let cursor_offset = area.offset(offset);
+                        frame.set_cursor_position(cursor_offset);
+                    },
+                    _ => {},
                 }
+
                 frame.render_widget(&self, area);
             })?;
 
@@ -187,6 +235,10 @@ impl App {
                 DiscoveryEvent::Response(nodes) => {
                     self.status = "Discovery Complete".into();
                     self.nodes = nodes;
+                    if self.nodes.len() > 0 {
+                        self.selected = 0;
+                        self.set_selected_node_guid()
+                    }
                 }
                 _ => {
                     self.status = "Unknown Discovery Event".into();
@@ -205,20 +257,85 @@ impl App {
         Ok(())
     }
 
-    // Handle keyboard inputs.
+    /// Handle keyboard inputs.
     fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
 
-        // Handling for the search popup
-        if self.show_popup {
-            match key_event {
+        // Handling for popup
+        if self.active_popup != Popup::None {
 
-                KeyEvent { code: KeyCode::Esc, .. }
-                | KeyEvent { code: KeyCode::Enter, .. } => {
-                    self.show_popup = false;
-                }
+            match self.active_popup {
+                Popup::None => {},
+                Popup::Search => {
+                    match key_event {
 
-                // Other key presses go to the search field
-                _ => self.search_field.on_key_press(key_event),
+                        KeyEvent { code: KeyCode::Esc, .. }
+                        | KeyEvent { code: KeyCode::Enter, .. } => {
+                            self.active_popup = Popup::None;
+                        }
+
+                        // Other key presses go to the search field
+                        _ => self.search_form.on_key_press(key_event),
+                    }
+                },
+                Popup::Details => {
+                    match key_event {
+                        KeyEvent { code: KeyCode::Esc, .. }
+                        | KeyEvent { code: KeyCode::Enter, .. } => {
+                            self.active_popup = Popup::None;
+                        }
+
+                        // Move selection down
+                        KeyEvent {
+                            code: KeyCode::Down,
+                            ..
+                        } => {
+                            if !self.display_counters.is_empty() {
+
+                                let max_idx = self.display_counters.len().saturating_sub(1);
+                                self.popup_selected = (self.popup_selected + 1).min(max_idx);
+
+
+                                let vis = self.visible_rows.get().max(1);
+                                let max_offset = self.display_counters.len().saturating_sub(vis);
+                                self.status = format!("{}", max_offset);
+
+                                if self.popup_selected >= self.popup_table_offset + vis {
+                                    self.popup_table_offset = (self.popup_table_offset + 1).min(max_offset);
+                                }
+                                
+                            }
+                        }
+
+                    // Move selection up
+                    KeyEvent {
+                        code: KeyCode::Up,
+                        ..
+                    } => {
+                        if !self.display_counters.is_empty() {
+                            if self.popup_selected > 0 {
+                                self.popup_selected -= 1;
+                            }
+
+                            if self.popup_selected < self.popup_table_offset {
+                                self.popup_table_offset = self.popup_table_offset.saturating_sub(1);
+                            }                            
+                        }
+                    }
+
+                    // Update counters
+                    KeyEvent {
+                        code: KeyCode::Char('u'),
+                        ..
+                    } => {
+                        if self.nodes.is_empty() {
+                            self.status = "No nodes discovered yet, cannot update counters.".into();
+                        } else {
+                            self.update_counters();
+                        }
+                    }
+                        _ => {}
+                    }
+                },
             }
             return Ok(());
         }
@@ -316,6 +433,8 @@ impl App {
                     let max_idx = self.nodes.len().saturating_sub(1);
                     self.selected = (self.selected + 1).min(max_idx);
 
+                    self.set_selected_node_guid();
+
                     let vis = self.visible_rows.get().max(1);
                     let max_offset = self.nodes.len().saturating_sub(vis);
                     if self.selected >= self.table_offset + vis {
@@ -330,12 +449,17 @@ impl App {
                 ..
             } => {
                 if !self.nodes.is_empty() {
+
                     if self.selected > 0 {
                         self.selected -= 1;
                     }
+
                     if self.selected < self.table_offset {
                         self.table_offset = self.table_offset.saturating_sub(1);
                     }
+
+                    self.set_selected_node_guid();
+
                 }
             }
 
@@ -344,13 +468,24 @@ impl App {
                 code: KeyCode::Enter,
                 ..
             } => {
-                if !self.nodes.is_empty() {
-                    self.show_popup = true;
-                    self.popup_rect.width = 10;
-                    self.popup_rect.height = 10;
-                    self.popup_rect.x = 10;
-                    self.popup_rect.y = 10;
+                if self.selected_guid.is_some() {
+                    self.display_counters.clear();
+                    self.current_counters.clear();
+                    self.previous_counters.clear();
+                    self.popup_table_offset = 0;
+                    self.popup_selected = 0;       
+                    self.active_popup = Popup::Details;
+                } else {
+                    self.active_popup = Popup::None;
                 }
+            }
+
+            // Show Search popup
+            KeyEvent {
+                code: KeyCode::Char('/'),
+                ..
+            } => {
+                self.active_popup = Popup::Search;
             }
 
             _ => {}
@@ -377,13 +512,68 @@ impl App {
 
         self.status = "Updating counters…".into();
         self.pending_counter_update = true;
+
+        let lid_ports: Vec<LidPort> = match self.active_popup {
+
+            Popup::Details => {
+
+                match self.selected_guid {
+                    Some(guid) => {
+                        
+                        let node_option = self.nodes.iter().find(|n| n.guid == guid);
+
+                        match node_option {
+                            Some(node) => {
+                                self.status = node.node_description.clone();
+
+                                let lid = node.lid;
+                                node.ports.iter().map(|p|{
+                                    LidPort{
+                                        lid: lid,
+                                        number: p.number
+                                    }
+                                }).collect()
+                            },
+                            None => {
+                                self.nodes.iter().map(|n| {
+                                            LidPort {
+                                                lid : n.lid,
+                                                number: 255,
+                                            }
+                                        }).collect()
+                            },
+                        }
+                    },
+                    None => {
+                        self.nodes.iter().map(|n| {
+                                    LidPort {
+                                        lid : n.lid,
+                                        number: 255,
+                                    }
+                                }).collect()
+                    }
+                }
+
+            }
+            // Everything else
+            _ => {
+                self.nodes.iter().map(|n| {
+                            LidPort {
+                                lid : n.lid,
+                                number: 255,
+                            }
+                        }).collect()
+            }
+
+        };
+
         self.events.send(AppEvent::Counters(CounterEvent::Request(
-            self.nodes.clone(),
+            lid_ports
         )));
     }
 
-    //Populate the counters
-    fn handle_counters_update(&mut self, counters: HashMap<u16, HashMap<String, u64>>) {
+    /// Populate the counters
+    fn handle_counters_update(&mut self, counters: HashMap<(u16, i32), HashMap<String, u64>>) {
 
         self.previous_counters = std::mem::take(&mut self.current_counters);
         self.current_counters = counters;
@@ -396,6 +586,7 @@ impl App {
 
             }
             CounterMode::Delta => {
+                self.display_counters.clear();
                 // For each LID in the incoming counters, mutate the old counters in place
                 for (lid, new_map) in &self.current_counters {
                     if let Some(old_map) = self.previous_counters.get_mut(&lid) {
@@ -411,7 +602,7 @@ impl App {
 
             }
             CounterMode::Baseline => {
-
+                self.display_counters.clear();
                 for (lid, new_map) in & self.current_counters {
                     if let Some(old_map) = self.baseline_counters.get_mut(&lid) {
                         let delta = calc_counters_delta(&old_map, &new_map);
@@ -455,6 +646,72 @@ impl App {
     // Cleanly shuts down the application.
     fn quit(&mut self) {
         self.running = false;
+    }
+
+    fn set_selected_node_guid(&mut self){
+
+        let re = regex::Regex::new(&self.search_form.value).unwrap_or_else(|_| {
+            regex::Regex::new("").unwrap()
+        });
+
+        // Filter and gather node information
+        let mut node_info: Vec<(u64, u16, String, u16, f64, f64, f64, u128, String)> = self
+            .nodes
+            .iter()
+            .filter(|n| {  
+                re.is_match(&n.node_description)
+            })
+            .map(|n| {
+                let counters = self.display_counters.get(&(n.lid, 255 as i32));
+
+                let recv_bw = counters
+                    .map_or(0.0, |ctrs| get_bw(ctrs, "rcv_bytes", &self.counter_mode));
+                let xmt_bw = counters
+                    .map_or(0.0, |ctrs| get_bw(ctrs, "xmt_bytes", &self.counter_mode));
+                let xmit_waits = counters
+                    .map_or(0.0, |ctrs| get_bw_loss(ctrs, "xmit_waits", &self.counter_mode));
+                let error_count = counters
+                    .map_or(0, |ctrs| count_errors(ctrs));
+                let error_strings = counters
+                    .map_or("".to_string(), |ctrs| get_error_strings(ctrs));
+                (
+                    n.guid,
+                    n.lid,
+                    n.node_description.clone(),
+                    n.ports.len() as u16,
+                    recv_bw,
+                    xmt_bw,
+                    xmit_waits,
+                    error_count,
+                    error_strings
+                )
+            })
+            .collect();
+
+        // Sort based on `self.sort_column`
+        node_info.sort_by(|a, b| {
+            let ordering = match self.sort_column {
+                1 => a.1.cmp(&b.1),
+                2 => a.2.cmp(&b.2),
+                3 => a.3.cmp(&b.3),
+                4 => a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal),
+                5 => a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal),
+                6 => a.6.partial_cmp(&b.6).unwrap_or(std::cmp::Ordering::Equal),
+                7 => a.7.cmp(&b.7),
+                8 => a.8.cmp(&b.8),
+                _ => std::cmp::Ordering::Equal,
+            };
+
+            if self.sort_ascending {
+                ordering
+            } else {
+                ordering.reverse()
+            }
+        });
+
+        if let Some(selected_node) = node_info.get(self.selected) {
+            self.selected_guid = Some(selected_node.0);
+        }
     }
 }
 

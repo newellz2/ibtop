@@ -29,6 +29,9 @@ pub struct Args {
     #[arg(long, default_value_t = 1000)]
     pub timeout: u32,
 
+    #[arg(long, default_value_t = 3)]
+    pub retries: u32,
+
     #[arg(long, default_value_t = false)]
     pub include_hcas: bool,
 
@@ -39,7 +42,7 @@ pub struct Args {
 
 fn main() -> color_eyre::Result<()> {
     let args = Args::parse();
-    let _stderr_gag: Option<gag::Gag> = gag::Gag::stderr().ok();
+    //let _stderr_gag: Option<gag::Gag> = gag::Gag::stderr().ok();
     color_eyre::install()?;
     let terminal = ratatui::init();
     let result = App::new(args).run(terminal);
