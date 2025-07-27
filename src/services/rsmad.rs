@@ -95,87 +95,88 @@ impl DiscoverService for RsmadDiscoveryService {
             return nodes;
         }
 
-        let mut strong_refs = Vec::new();
+        // Single pass, immediate processing
+        let mut port_connections: HashMap<(u64, i32), String> = HashMap::new();
+        let mut pending_nodes: Vec<(u64, String, u16, rsmad::ibnetdisc::node::NodeType, Option<Vec<i32>>)> = Vec::new();
 
-        // FIRST PASS: Collect all strong references to prevent cleanup
+        // Extract all connection info AND basic node data in one pass
         for (_guid, rc_node) in &fabric.nodes {
             let nd_ref = rc_node.borrow();
-            if matches!(nd_ref.node_type, rsmad::ibnetdisc::node::NodeType::SWITCH) {
-                if let Some(ports) = &nd_ref.ports {
-                    for p in ports {
-                        let p_ref = p.as_ref().borrow();
-                        if let (Some(weak_remote_port), Some(weak_remote_node)) =
-                            (&p_ref.remote_port, &p_ref.remote_node)
+            
+            // Store basic node info for second pass
+            let port_numbers = nd_ref.ports.as_ref().map(|ports| {
+                ports.iter().map(|p| p.as_ref().borrow().number).collect()
+            });
+            
+            pending_nodes.push((
+                nd_ref.guid,
+                nd_ref.node_desc.clone(),
+                nd_ref.lid,
+                nd_ref.node_type.clone(),
+                port_numbers
+            ));
+
+            // Extract connection info while weak refs are valid
+            if let Some(ports) = &nd_ref.ports {
+                for p in ports {
+                    let p_ref = p.as_ref().borrow();
+                    if let (Some(weak_remote_port), Some(weak_remote_node)) =
+                        (&p_ref.remote_port, &p_ref.remote_node)
+                    {
+                        if let (Some(_remote_port), Some(remote_node)) =
+                            (weak_remote_port.upgrade(), weak_remote_node.upgrade())
                         {
-                            if let (Some(remote_port), Some(remote_node)) =
-                                (weak_remote_port.upgrade(), weak_remote_node.upgrade())
-                            {
-                                strong_refs.push((remote_port, remote_node));
-                            }
+                            let remote_node_ref = RefCell::borrow(&remote_node);
+                            port_connections.insert(
+                                (nd_ref.guid, p_ref.number),
+                                remote_node_ref.node_desc.clone()
+                            );
                         }
                     }
                 }
             }
         }
 
-        // SECOND PASS: Process all nodes with strong references held
-        for (_guid, rc_node) in fabric.nodes {
-            {
-            let nd_ref = rc_node.borrow();
-
-            match nd_ref.node_type {
+        // Process stored node data, drop fabric
+        drop(fabric);
+        
+        for (guid, node_desc, lid, node_type, port_numbers) in pending_nodes {
+            match node_type {
                 rsmad::ibnetdisc::node::NodeType::CA => {
                     if self.config.include_hcas {
                         nodes.push(Node {
-                            guid: nd_ref.guid,
-                            node_description: nd_ref.node_desc.clone(),
-                            ports: Vec::new(), // CAs don't have ports in this context
-                            lid: nd_ref.lid,
+                            guid,
+                            node_description: node_desc,
+                            ports: Vec::new(),
+                            lid,
                         });
                     }
                 }
                 rsmad::ibnetdisc::node::NodeType::SWITCH => {
-                    
-                    let ports = match &nd_ref.ports {
-                        Some(ports) => ports.iter().map(|p| {
-                            let p_ref = p.as_ref().borrow();
-                            let mut remote_desc = "".to_string();
-
-                            if let (Some(weak_remote_port), Some(weak_remote_node)) =
-                            (&p_ref.remote_port, &p_ref.remote_node)
-                            
-                            {
-                                if let (Some(remote_port), Some(remote_node)) =
-                                    (weak_remote_port.upgrade(), weak_remote_node.upgrade())
-                                {
-                                    let rp = RefCell::borrow(&remote_port);
-                                    let rn = RefCell::borrow(&remote_node);
-                                    remote_desc = format!("{}", rn.node_desc);
-                                } else {
-                                    // This should now be very rare
-                                    eprintln!("Warning: Weak reference failed for port {} on switch {}", 
-                                             p_ref.number, nd_ref.node_desc);
-                                }
-                            }
+                    let ports = if let Some(port_nums) = port_numbers {
+                        port_nums.into_iter().map(|port_num| {
+                            let remote_desc = port_connections
+                                .get(&(guid, port_num))
+                                .cloned()
+                                .unwrap_or_default();
 
                             Port { 
-                                number: p_ref.number,
+                                number: port_num,
                                 remote_node_description: remote_desc,
                             }
-                        }).collect(),
-                        None => Vec::new(),
+                        }).collect()
+                    } else {
+                        Vec::new()
                     };
 
                     nodes.push(Node {
-                        guid: nd_ref.guid,
-                        node_description: nd_ref.node_desc.clone(),
+                        guid,
+                        node_description: node_desc,
                         ports,
-                        lid: nd_ref.lid,
+                        lid,
                     });
-                    
                 }
                 _ => {}
-            }
             }
         }
 
