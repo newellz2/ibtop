@@ -2,8 +2,7 @@ use crate::{app::AppConfig, services::lib::{LidPort, Port}};
 use chrono::Utc;
 use rayon::{prelude::*, ThreadPoolBuilder};
 use std::{
-    collections::HashMap,
-    sync::mpsc::{Receiver, Sender},
+    cell::RefCell, collections::HashMap, sync::mpsc::{Receiver, Sender}
 };
 use super::lib::{CounterEvent, CountersService, DiscoverService, DiscoveryEvent, Node};
 
@@ -96,9 +95,34 @@ impl DiscoverService for RsmadDiscoveryService {
             return nodes;
         }
 
-        // If success, parse the discovered nodes
-        for (_guid, rc_node) in fabric.nodes {
+        let mut strong_refs = Vec::new();
+
+        // FIRST PASS: Collect all strong references to prevent cleanup
+        for (_guid, rc_node) in &fabric.nodes {
             let nd_ref = rc_node.borrow();
+            if matches!(nd_ref.node_type, rsmad::ibnetdisc::node::NodeType::SWITCH) {
+                if let Some(ports) = &nd_ref.ports {
+                    for p in ports {
+                        let p_ref = p.as_ref().borrow();
+                        if let (Some(weak_remote_port), Some(weak_remote_node)) =
+                            (&p_ref.remote_port, &p_ref.remote_node)
+                        {
+                            if let (Some(remote_port), Some(remote_node)) =
+                                (weak_remote_port.upgrade(), weak_remote_node.upgrade())
+                            {
+                                strong_refs.push((remote_port, remote_node));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // SECOND PASS: Process all nodes with strong references held
+        for (_guid, rc_node) in fabric.nodes {
+            {
+            let nd_ref = rc_node.borrow();
+
             match nd_ref.node_type {
                 rsmad::ibnetdisc::node::NodeType::CA => {
                     if self.config.include_hcas {
@@ -116,11 +140,24 @@ impl DiscoverService for RsmadDiscoveryService {
                         Some(ports) => ports.iter().map(|p| {
                             let p_ref = p.as_ref().borrow();
                             let mut remote_desc = "".to_string();
-                            if let Some(remote_node_weak) = &p_ref.remote_node {
-                                if let Some(remote_node_ref) = remote_node_weak.upgrade() {
-                                    remote_desc = remote_node_ref.borrow().node_desc.clone();
+
+                            if let (Some(weak_remote_port), Some(weak_remote_node)) =
+                            (&p_ref.remote_port, &p_ref.remote_node)
+                            
+                            {
+                                if let (Some(remote_port), Some(remote_node)) =
+                                    (weak_remote_port.upgrade(), weak_remote_node.upgrade())
+                                {
+                                    let rp = RefCell::borrow(&remote_port);
+                                    let rn = RefCell::borrow(&remote_node);
+                                    remote_desc = format!("{}", rn.node_desc);
+                                } else {
+                                    // This should now be very rare
+                                    eprintln!("Warning: Weak reference failed for port {} on switch {}", 
+                                             p_ref.number, nd_ref.node_desc);
                                 }
                             }
+
                             Port { 
                                 number: p_ref.number,
                                 remote_node_description: remote_desc,
@@ -135,8 +172,10 @@ impl DiscoverService for RsmadDiscoveryService {
                         ports,
                         lid: nd_ref.lid,
                     });
+                    
                 }
                 _ => {}
+            }
             }
         }
 
