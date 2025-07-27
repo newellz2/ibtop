@@ -62,6 +62,7 @@ pub trait CountersService {
 pub struct TestDiscoverService {
     ev_disc_rx: Receiver<DiscoveryEvent>,
     disc_ev_tx: Sender<DiscoveryEvent>,
+    ports_per_node: usize,
 }
 
 impl TestDiscoverService {
@@ -74,6 +75,7 @@ impl TestDiscoverService {
         Self{
             ev_disc_rx,
             disc_ev_tx,
+            ports_per_node: 64,
         }
     }
     pub fn run(self)  -> color_eyre::Result<()> {
@@ -107,17 +109,16 @@ impl DiscoverService for TestDiscoverService{
         // Create a handful of switches with sequential LIDs.
         for i in 1..=1600 {
             let mut ports: Vec<Port> = Vec::new();
-            for i in 0..=64 {
-                ports.push(
-                    Port {
-                        number: i
-                    }
-                );
+            for port_num in 0..self.ports_per_node {
+                ports.push(Port {
+                    number: port_num as i32
+                });
             }
+            
             nodes.push(Node {
                 guid: i as u64,
                 node_description: format!("switch-{i}"),
-                ports: ports,
+                ports,
                 lid: 16 + i as u16,
             });
         }
@@ -137,7 +138,7 @@ impl TestCountersService {
     pub fn new(
         ev_ctr_rx: Receiver<CounterEvent>,
         ctr_ev_tx: Sender<CounterEvent>, 
-        _config: AppConfig
+        config: AppConfig
     ) -> Self {
 
         Self {

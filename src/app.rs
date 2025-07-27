@@ -18,18 +18,30 @@ pub const SEARCH_POPUP_LINES_HEIGHT: u16 = 3;
 pub const DETAILS_POPUP_PERCENT_WIDTH: u16 = 90;
 pub const DETAILS_POPUP_PERCENT_HEIGHT: u16 = 80;
 
+pub const AGG_COUNTERS_PORT: i32 = 255;
+pub const TICK_RESET_INTERVAL: usize = 30;
+pub const MAX_SORT_COLUMNS: i32 = 9;
+
+/// Represents different modes for displaying counter data.
 #[derive(Debug)]
 pub enum CounterMode {
+    /// Display raw counter values
     Whole,
+    /// Display delta values (difference from previous update)
     Delta,
+    /// Display values relative to a baseline
     Baseline,
 }
 
 
+/// Represents the currently active popup dialog.
 #[derive(Debug, PartialEq)]
 pub enum Popup {
+    /// No popup is active
     None,
+    /// Search popup is active
     Search,
+    /// Node details popup is active
     Details,
 }
 
@@ -233,15 +245,21 @@ impl App {
             }
             Event::Discover(discovery_event) => match discovery_event {
                 DiscoveryEvent::Response(nodes) => {
-                    self.status = "Discovery Complete".into();
+                    self.status = format!("Discovery complete: {} nodes found", nodes.len());
                     self.nodes = nodes;
-                    if self.nodes.len() > 0 {
+                    if !self.nodes.is_empty() {
                         self.selected = 0;
-                        self.set_selected_node_guid()
+                        self.set_selected_node_guid();
                     }
                 }
+                DiscoveryEvent::Error => {
+                    self.status = "Discovery failed".into();
+                }
+                DiscoveryEvent::Exit => {
+                    // Discovery service is shutting down
+                }
                 _ => {
-                    self.status = "Unknown Discovery Event".into();
+                    self.status = "Unknown discovery event".into();
                 }
             },
             Event::Counters(counter_event) => match counter_event {
@@ -249,8 +267,15 @@ impl App {
                     self.handle_counters_update(counters);
                     self.last_counter_update = Some(Utc::now());
                 }
+                CounterEvent::Error => {
+                    self.status = "Counter update failed".into();
+                    self.pending_counter_update = false;
+                }
+                CounterEvent::Exit => {
+                    // Counter service is shutting down
+                }
                 _ => {
-                    self.status = "Unknown Counters Event".into();
+                    self.status = "Unknown counter event".into();
                 }
             },
         }
@@ -502,15 +527,15 @@ impl App {
     // Update Counters
     fn update_counters(&mut self) {
         if self.pending_counter_update {
-            self.status = "Counters update is already pending…".into();
+            self.status = "Counters update is already pending...".into();
             return;
         }
         if self.nodes.is_empty() {
-            self.status = "No nodes to update counters for.".into();
+            self.status = "No nodes discovered yet, cannot update counters.".into();
             return;
         }
 
-        self.status = "Updating counters…".into();
+        self.status = "Updating counters...".into();
         self.pending_counter_update = true;
 
         let lid_ports: Vec<LidPort> = match self.active_popup {
@@ -529,7 +554,7 @@ impl App {
                                 let lid = node.lid;
                                 node.ports.iter().map(|p|{
                                     LidPort{
-                                        lid: lid,
+                                        lid,
                                         number: p.number
                                     }
                                 }).collect()
@@ -538,7 +563,7 @@ impl App {
                                 self.nodes.iter().map(|n| {
                                             LidPort {
                                                 lid : n.lid,
-                                                number: 255,
+                                                number: AGG_COUNTERS_PORT,
                                             }
                                         }).collect()
                             },
@@ -548,7 +573,7 @@ impl App {
                         self.nodes.iter().map(|n| {
                                     LidPort {
                                         lid : n.lid,
-                                        number: 255,
+                                        number: AGG_COUNTERS_PORT,
                                     }
                                 }).collect()
                     }
@@ -560,7 +585,7 @@ impl App {
                 self.nodes.iter().map(|n| {
                             LidPort {
                                 lid : n.lid,
-                                number: 255,
+                                number: AGG_COUNTERS_PORT,
                             }
                         }).collect()
             }
@@ -621,7 +646,7 @@ impl App {
 
     // Called every tick (roughly 30fps by default).
     fn on_tick(&mut self) {
-        self.tick = (self.tick + 1) % 30; // Reset tick after 29
+        self.tick = (self.tick + 1) % TICK_RESET_INTERVAL; // Reset tick after TICK_RESET_INTERVAL - 1
         if self.tick == 0 {
             self.auto_update_counter += 1;
         }
@@ -638,9 +663,10 @@ impl App {
         }
     }
 
-    // Increments the sort column, preventing integer overflow.
+    /// Increments the sort column, cycling through available columns (0-8).
+    /// Column 0 means no sorting, columns 1-8 correspond to different data fields.
     fn increment_sort_column(&mut self) {
-        self.sort_column = (self.sort_column + 1) % 8
+        self.sort_column = (self.sort_column + 1) % MAX_SORT_COLUMNS;
     }
 
     // Cleanly shuts down the application.
@@ -648,8 +674,8 @@ impl App {
         self.running = false;
     }
 
-    fn set_selected_node_guid(&mut self){
-
+    fn set_selected_node_guid(&mut self) {
+        // Create regex for filtering, defaulting to empty string if invalid
         let re = regex::Regex::new(&self.search_form.value).unwrap_or_else(|_| {
             regex::Regex::new("").unwrap()
         });
@@ -658,11 +684,9 @@ impl App {
         let mut node_info: Vec<(u64, u16, String, u16, f64, f64, f64, u128, String)> = self
             .nodes
             .iter()
-            .filter(|n| {  
-                re.is_match(&n.node_description)
-            })
+            .filter(|n| re.is_match(&n.node_description))
             .map(|n| {
-                let counters = self.display_counters.get(&(n.lid, 255 as i32));
+                let counters = self.display_counters.get(&(n.lid, AGG_COUNTERS_PORT));
 
                 let recv_bw = counters
                     .map_or(0.0, |ctrs| get_bw(ctrs, "rcv_bytes", &self.counter_mode));
@@ -674,6 +698,7 @@ impl App {
                     .map_or(0, |ctrs| count_errors(ctrs));
                 let error_strings = counters
                     .map_or("".to_string(), |ctrs| get_error_strings(ctrs));
+                
                 (
                     n.guid,
                     n.lid,
@@ -691,15 +716,15 @@ impl App {
         // Sort based on `self.sort_column`
         node_info.sort_by(|a, b| {
             let ordering = match self.sort_column {
-                1 => a.1.cmp(&b.1),
-                2 => a.2.cmp(&b.2),
-                3 => a.3.cmp(&b.3),
-                4 => a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal),
-                5 => a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal),
-                6 => a.6.partial_cmp(&b.6).unwrap_or(std::cmp::Ordering::Equal),
-                7 => a.7.cmp(&b.7),
-                8 => a.8.cmp(&b.8),
-                _ => std::cmp::Ordering::Equal,
+                1 => a.1.cmp(&b.1),           // LID
+                2 => a.2.cmp(&b.2),           // Description
+                3 => a.3.cmp(&b.3),           // Port count
+                4 => a.4.partial_cmp(&b.4).unwrap_or(Ordering::Equal), // Receive BW
+                5 => a.5.partial_cmp(&b.5).unwrap_or(Ordering::Equal), // Transmit BW
+                6 => a.6.partial_cmp(&b.6).unwrap_or(Ordering::Equal), // Xmit waits
+                7 => a.7.cmp(&b.7),           // Error count
+                8 => a.8.cmp(&b.8),           // Error strings
+                _ => Ordering::Equal,
             };
 
             if self.sort_ascending {
@@ -709,17 +734,25 @@ impl App {
             }
         });
 
+        // Set the selected GUID if we have a valid selection
         if let Some(selected_node) = node_info.get(self.selected) {
             self.selected_guid = Some(selected_node.0);
+        } else {
+            // Clear selection if no valid node found
+            self.selected_guid = None;
         }
     }
 }
 
+/// Calculate the delta between two counter maps.
+/// 
+/// This function computes the difference between new and old counter values.
+/// If the new value is less than the old value (indicating a counter reset),
+/// it returns the new value as-is.
 fn calc_counters_delta(
     old_map: &HashMap<String, u64>,
     new_map: &HashMap<String, u64>,
 ) -> HashMap<String, u64> {
-
     let mut output = HashMap::new();
 
     for (key, &new_val) in new_map {
@@ -730,6 +763,7 @@ fn calc_counters_delta(
                 new_val.saturating_sub(old_val)
             }
             _ => {
+                // Counter likely reset, use new value as-is
                 new_val
             }
         };

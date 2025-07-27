@@ -42,7 +42,7 @@ pub struct Args {
 
 fn main() -> color_eyre::Result<()> {
     let args = Args::parse();
-    //let _stderr_gag: Option<gag::Gag> = gag::Gag::stderr().ok();
+    let _stderr_gag: Option<gag::Gag> = gag::Gag::stderr().ok();
     color_eyre::install()?;
     let terminal = ratatui::init();
     let result = App::new(args).run(terminal);

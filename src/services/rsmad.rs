@@ -51,11 +51,13 @@ impl RsmadDiscoveryService {
                     DiscoveryEvent::Request => {
                         let nodes = self.get_nodes();
                         // Send the response even if empty
-                        let _ = self.disc_ev_tx.send(DiscoveryEvent::Response(nodes));
+                        if let Err(e) = self.disc_ev_tx.send(DiscoveryEvent::Response(nodes)) {
+                            eprintln!("Failed to send discovery response: {e}");
+                        }
                     }
-                    // Possibly log unknown events
+                    // Log unknown events for debugging
                     _ => {
-                        eprintln!("Received unexpected DiscoveryEvent: {:?}", ev);
+                        eprintln!("Received unexpected DiscoveryEvent: {ev:?}");
                     }
                 },
                 // If the sender is gone, we can exit or continue 
@@ -70,7 +72,12 @@ impl RsmadDiscoveryService {
 
 impl DiscoverService for RsmadDiscoveryService {
     fn get_nodes(&self) -> Vec<Node> {
-        rsmad::umad::umad_init();
+        let init_result = rsmad::umad::umad_init();
+        if init_result != 0 {
+            eprintln!("Failed to initialize UMAD: error code {}", init_result);
+            return Vec::new();
+        }
+        
         unsafe { rsmad::ibmad::sys::madrpc_show_errors(0) };
 
         let mut nodes = Vec::new();
@@ -98,19 +105,25 @@ impl DiscoverService for RsmadDiscoveryService {
                         nodes.push(Node {
                             guid: nd_ref.guid,
                             node_description: nd_ref.node_desc.clone(),
-                            ports: vec![],
+                            ports: Vec::new(), // CAs don't have ports in this context
                             lid: nd_ref.lid,
                         });
-                        }
+                    }
                 }
                 rsmad::ibnetdisc::node::NodeType::SWITCH => {
-
-                    let ports: Vec<Port> = vec![];
+                    
+                    let ports = match &nd_ref.ports {
+                        Some(ports) => ports.iter().map(|p| {
+                            let p_ref = p.as_ref().borrow();
+                            Port { number: p_ref.number }
+                        }).collect(),
+                        None => Vec::new(),
+                    };
 
                     nodes.push(Node {
                         guid: nd_ref.guid,
                         node_description: nd_ref.node_desc.clone(),
-                        ports: ports,
+                        ports,
                         lid: nd_ref.lid,
                     });
                 }
@@ -152,11 +165,16 @@ impl RsmadCountersService {
                     }
                     CounterEvent::Request(nodes) => {
                         let counters = self.get_counters(nodes);
-                        let _ = self.ctr_ev_tx.send(CounterEvent::Response(counters));
+                        if let Err(e) = self.ctr_ev_tx.send(CounterEvent::Response(counters)) {
+                            eprintln!("Failed to send counters response: {e}");
+                        }
                     }
-                    _ => {}
+                    _ => {
+                        eprintln!("Received unexpected CounterEvent: {ev:?}");
+                    }
                 },
-                Err(_e) => {
+                Err(e) => {
+                    eprintln!("CountersService channel closed: {e}");
                     return Ok(());
                 }
             }
@@ -166,7 +184,14 @@ impl RsmadCountersService {
 
 impl CountersService for RsmadCountersService {
     fn get_counters(&self, lid_ports: Vec<LidPort>) -> HashMap<(u16, i32), HashMap<String, u64>> {
-        rsmad::umad::umad_init();
+        // Initialize UMAD
+        let init_result = rsmad::umad::umad_init();
+        if init_result != 0 {
+            eprintln!("Failed to initialize UMAD: error code {}", init_result);
+            return HashMap::new();
+        }
+        
+        // Set error reporting and debug levels
         unsafe {
             rsmad::ibmad::sys::madrpc_show_errors(0);
             rsmad::ibmad::sys::umad_debug(0);
@@ -176,13 +201,15 @@ impl CountersService for RsmadCountersService {
         let hca = self.config.hca.clone();
         let timeout = self.config.timeout;
 
-        // Build thread pool
+        // Build thread pool with error handling
         let pool = match ThreadPoolBuilder::new()
             .num_threads(self.config.threads)
             .build()
         {
             Ok(p) => p,
-            Err(_) => {
+            Err(e) => {
+                eprintln!("Failed to create thread pool: {e}");
+                rsmad::umad::umad_done();
                 return HashMap::new();
             }
         };
@@ -199,7 +226,8 @@ impl CountersService for RsmadCountersService {
 
                     let mut port = match port_result {
                         Ok(p) => p,
-                        Err(_) => {
+                        Err(e) => {
+                            eprintln!("Failed to open port for LID {}: {e}", lp.lid);
                             return None;
                         }
                     };
@@ -211,6 +239,7 @@ impl CountersService for RsmadCountersService {
 
                     let result = match perfquery_res {
                         Ok(mut perfctrs) => {
+                            // Add timestamps for bandwidth calculations
                             perfctrs.counters.insert(
                                 "start_timestamp".to_string(),
                                 start.timestamp_nanos_opt().unwrap_or(0) as u64,
@@ -221,12 +250,16 @@ impl CountersService for RsmadCountersService {
                             );
                             Some(((lp.lid, lp.number), perfctrs.counters))
                         }
-                        Err(_) => {
+                        Err(e) => {
+                            eprintln!("Failed to query performance counters for LID {} port {}: {e}", lp.lid, lp.number);
                             None
                         }
                     };
 
-                    let _ = rsmad::ibmad::mad_rpc_close_port(&mut port);
+                    // Always close the port
+                    if let Err(e) = rsmad::ibmad::mad_rpc_close_port(&mut port) {
+                        eprintln!("Failed to close port for LID {}: {e}", lp.lid);
+                    }
 
                     result
                 })

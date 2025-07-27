@@ -14,21 +14,29 @@ use crate::{app::AppConfig, services::{
 /// The frequency (in Hz) at which tick events are emitted.
 const TICK_FPS: f64 = 30.0;
 
+/// Main event enum that represents all possible events in the application.
 #[derive(Clone, Debug)]
 pub enum Event {
+    /// Periodic tick event for UI updates
     Tick,
+    /// Terminal input events (keyboard, mouse, etc.)
     Crossterm(CrosstermEvent),
+    /// Application-specific events
     App(AppEvent),
+    /// Discovery service events
     Discover(DiscoveryEvent),
+    /// Counter service events
     Counters(CounterEvent),
 }
 
-// Application events.
-//
+/// Application-specific events that can be sent from the UI to the event handler.
 #[derive(Clone, Debug)]
 pub enum AppEvent {
+    /// Discovery service request/response
     Discover(DiscoveryEvent),
+    /// Counter service request/response
     Counters(CounterEvent),
+    /// Quit the application
     Quit,
 }
 
@@ -83,9 +91,10 @@ impl EventHandler {
                     }
                     // Default
                     _ => {
-                        let disc_actor =
-                            RsmadDiscoveryService::new(ev_disc_rx, disc_ev_tx, config_clone);
-                        let _ = disc_actor.run();
+                        let disc_actor = RsmadDiscoveryService::new(ev_disc_rx, disc_ev_tx, config_clone);
+                        if let Err(e) = disc_actor.run() {
+                            eprintln!("Error in RsmadDiscoveryService: {e}");
+                        }
                     }
                 }
             });
@@ -106,9 +115,10 @@ impl EventHandler {
                     }
                     // Default
                     _ => {
-                        let ctr_actor =
-                            RsmadCountersService::new(ev_ctx_rx, ctr_ev_tx, config_clone);
-                        let _ = ctr_actor.run();
+                        let ctr_actor = RsmadCountersService::new(ev_ctx_rx, ctr_ev_tx, config_clone);
+                        if let Err(e) = ctr_actor.run() {
+                            eprintln!("Error in RsmadCountersService: {e}");
+                        }
                     }
                 }
             });
@@ -150,13 +160,27 @@ impl EventHandler {
     pub fn send(&mut self, app_event: AppEvent) {
         match app_event {
             AppEvent::Discover(DiscoveryEvent::Request) => {
-                let _ = self.disc_tx.send(DiscoveryEvent::Request);
+                if let Err(e) = self.disc_tx.send(DiscoveryEvent::Request) {
+                    eprintln!("Failed to send discovery request: {e}");
+                }
             }
             AppEvent::Counters(CounterEvent::Request(nodes)) => {
-                let _ = self.ctr_tx.send(CounterEvent::Request(nodes));
+                if let Err(e) = self.ctr_tx.send(CounterEvent::Request(nodes)) {
+                    eprintln!("Failed to send counters request: {e}");
+                }
+            }
+            AppEvent::Quit => {
+                // Send exit signals to all services
+                let _ = self.disc_tx.send(DiscoveryEvent::Exit);
+                let _ = self.ctr_tx.send(CounterEvent::Exit);
+                if let Err(e) = self.sender.send(Event::App(app_event)) {
+                    eprintln!("Failed to send quit event: {e}");
+                }
             }
             _ => {
-                let _ = self.sender.send(Event::App(app_event));
+                if let Err(e) = self.sender.send(Event::App(app_event)) {
+                    eprintln!("Failed to send app event: {e}");
+                }
             }
         }
     }
@@ -198,5 +222,13 @@ impl EventThread {
     /// Sends an event to the receiver, ignoring any send errors (e.g., if the receiver is dropped).
     fn send(&self, event: Event) {
         let _ = self.sender.send(event);
+    }
+}
+
+impl Drop for EventHandler {
+    fn drop(&mut self) {
+        // Send exit signals to all services when EventHandler is dropped
+        let _ = self.disc_tx.send(DiscoveryEvent::Exit);
+        let _ = self.ctr_tx.send(CounterEvent::Exit);
     }
 }

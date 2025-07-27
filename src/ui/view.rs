@@ -14,7 +14,10 @@ use crate::{
         Popup, 
         DETAILS_POPUP_PERCENT_HEIGHT, 
         DETAILS_POPUP_PERCENT_WIDTH, 
-        SEARCH_POPUP_LINES_HEIGHT, SEARCH_POPUP_PERCENT_WIDTH}
+        SEARCH_POPUP_LINES_HEIGHT, 
+        SEARCH_POPUP_PERCENT_WIDTH,
+        AGG_COUNTERS_PORT
+    }
 };
 use super::helpers::{
     truncate_fit, 
@@ -26,6 +29,12 @@ use super::helpers::{
     centered_rect_percent,
     centered_rect_percent_w_lines_h
 };
+
+// Column ratios for the main table layout
+const MAIN_TABLE_COLUMN_RATIOS: [f64; 8] = [0.04, 0.32, 0.04, 0.12, 0.12, 0.12, 0.12, 0.12];
+
+// Column ratios for the details popup table layout
+const DETAILS_TABLE_COLUMN_RATIOS: [f64; 8] = [0.0, 0.0, 0.5, 0.18, 0.18, 0.18, 0.18, 0.23];
 
 impl Widget for &App {
     // Renders the user interface widgets.
@@ -65,7 +74,13 @@ impl Widget for &App {
 }
 
 impl App {
-
+    /// Returns the sort indicator symbol for a given column.
+    /// 
+    /// # Arguments
+    /// * `col_idx` - The column index to get the sort indicator for
+    /// 
+    /// # Returns
+    /// A string containing the sort indicator ("▲" for ascending, "▼" for descending, or empty)
     fn get_sort_indicator(&self, col_idx: i32) -> &'static str {
         if self.sort_column == col_idx {
             if self.sort_ascending {
@@ -78,7 +93,7 @@ impl App {
         }
     }
 
-    // Render the top header section with three columns.
+    /// Render the top header section with three columns showing application status and metadata.
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
         let utc: DateTime<Utc> = Utc::now();
 
@@ -140,10 +155,13 @@ impl App {
         Paragraph::new(header_right_text).render(header_layout[2], buf);
     }
 
-    /// Render the main node table section that shows
-    /// LID, NODE, PORTS, RECV_BW, SEND_BW, BW_LOSS, ERRORS.
+    /// Render the main node table section that shows node information and performance metrics.
+    /// 
+    /// Displays columns for: LID, NODE, PORTS, RECV_BW, SEND_BW, BW_LOSS, ERRORS.
+    /// Supports filtering by search term and sorting by any column.
     fn render_nodes_table(&self, area: Rect, buf: &mut Buffer) {
 
+        // Create regex for filtering, defaulting to empty string if invalid
         let re = regex::Regex::new(&self.search_form.value).unwrap_or_else(|_| {
             regex::Regex::new("").unwrap()
         });
@@ -152,11 +170,9 @@ impl App {
         let mut node_info: Vec<(u64, u16, String, u16, f64, f64, f64, u128, String)> = self
             .nodes
             .iter()
-            .filter(|n| {  
-                re.is_match(&n.node_description)
-            })
+            .filter(|n| re.is_match(&n.node_description))
             .map(|n| {
-                let counters = self.display_counters.get(&(n.lid, 255));
+                let counters = self.display_counters.get(&(n.lid, AGG_COUNTERS_PORT));
 
                 let recv_bw = counters
                     .map_or(0.0, |ctrs| get_bw(ctrs, "rcv_bytes", &self.counter_mode));
@@ -168,6 +184,7 @@ impl App {
                     .map_or(0, |ctrs| count_errors(ctrs));
                 let error_strings = counters
                     .map_or("".to_string(), |ctrs| get_error_strings(ctrs));
+                
                 (
                     n.guid,
                     n.lid,
@@ -185,14 +202,14 @@ impl App {
         // Sort based on `self.sort_column`
         node_info.sort_by(|a, b| {
             let ordering = match self.sort_column {
-                1 => a.1.cmp(&b.1),
-                2 => a.2.cmp(&b.2),
-                3 => a.3.cmp(&b.3),
-                4 => a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal),
-                5 => a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal),
-                6 => a.6.partial_cmp(&b.6).unwrap_or(std::cmp::Ordering::Equal),
-                7 => a.7.cmp(&b.7),
-                8 => a.8.cmp(&b.8),
+                1 => a.1.cmp(&b.1),           // LID
+                2 => a.2.cmp(&b.2),           // Description
+                3 => a.3.cmp(&b.3),           // Port count
+                4 => a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal), // Receive BW
+                5 => a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal), // Transmit BW
+                6 => a.6.partial_cmp(&b.6).unwrap_or(std::cmp::Ordering::Equal), // Xmit waits
+                7 => a.7.cmp(&b.7),           // Error count
+                8 => a.8.cmp(&b.8),           // Error strings
                 _ => std::cmp::Ordering::Equal,
             };
 
@@ -204,19 +221,17 @@ impl App {
         });
 
         let available_width = area.width;
-
-        let column_ratios = [0.04, 0.32, 0.04, 0.12, 0.12, 0.12, 0.12, 0.12];
-        let widths = compute_column_widths(available_width, &column_ratios);
+        let widths = compute_column_widths(available_width, &MAIN_TABLE_COLUMN_RATIOS);
 
         let header_cells = vec![
-            Cell::from(format!("LID{}", self.get_sort_indicator(0))),
-            Cell::from(format!("NODE{}", self.get_sort_indicator(1))),
-            Cell::from(format!("PT{}", self.get_sort_indicator(2))),
-            Cell::from(format!("RECV_BW{}", self.get_sort_indicator(3))),
-            Cell::from(format!("SEND_BW{}", self.get_sort_indicator(4))),
-            Cell::from(format!("BW_LOSS{}", self.get_sort_indicator(5))),
-            Cell::from(format!("ERR_CNT{}", self.get_sort_indicator(6))),
-            Cell::from(format!("ERR_STR{}", self.get_sort_indicator(7))),
+            Cell::from(format!("LID{}", self.get_sort_indicator(1))),
+            Cell::from(format!("NODE{}", self.get_sort_indicator(2))),
+            Cell::from(format!("PT{}", self.get_sort_indicator(3))),
+            Cell::from(format!("RECV_BW{}", self.get_sort_indicator(4))),
+            Cell::from(format!("SEND_BW{}", self.get_sort_indicator(5))),
+            Cell::from(format!("BW_LOSS{}", self.get_sort_indicator(6))),
+            Cell::from(format!("ERR_CNT{}", self.get_sort_indicator(7))),
+            Cell::from(format!("ERR_STR{}", self.get_sort_indicator(8))),
         ];
 
         let header = Row::new(header_cells).style(
@@ -235,9 +250,7 @@ impl App {
             .enumerate()
             .skip(offset)
             .take(visible_rows)
-            .map(|(idx, (
-                    _guid, lid, desc, ports, r_bw, x_bw, waits, errs, err_str)
-                )| {
+            .map(|(idx, (_guid, lid, desc, ports, r_bw, x_bw, waits, errs, err_str))| {
                 let mut row = Row::new(vec![
                     Cell::from(format!("{}", lid)),
                     Cell::from(truncate_fit(desc, widths[1])),
@@ -248,6 +261,8 @@ impl App {
                     Cell::from(format!("{}", errs)),
                     Cell::from(truncate_fit(err_str, widths[7])),
                 ]);
+                
+                // Highlight the selected row
                 if self.selected == idx {
                     row = row.style(Style::default().bg(Color::Blue));
                 }
@@ -272,7 +287,10 @@ impl App {
 
     }
 
-    /// Render the footer section with three columns.
+    /// Render the footer section with keyboard shortcuts and application status.
+    /// 
+    /// Shows three columns with different categories of keyboard shortcuts
+    /// and current application state information.
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
         let footer_layout = Layout::horizontal([
             Constraint::Percentage(33),
@@ -330,6 +348,7 @@ impl App {
     }
 
     fn render_search_popup(&self, area: Rect, buf: &mut Buffer) {
+        // Don't render search popup if no nodes are available
         if self.nodes.is_empty() {
             return;
         }
@@ -352,6 +371,7 @@ impl App {
     }
 
     fn render_details_popup(&self, area: Rect, buf: &mut Buffer) {
+        // Don't render details popup if no node is selected
         if self.selected_guid.is_none() {
             return;
         }
@@ -376,14 +396,13 @@ impl App {
             .borders(Borders::ALL);
 
         let inner_area = block.inner(rect);
-        let column_ratios = [0.0, 0.0, 0.5, 0.18, 0.18, 0.18, 0.18, 0.23];
-        let widths = compute_column_widths(inner_area.width, &column_ratios);
+        let widths = compute_column_widths(inner_area.width, &DETAILS_TABLE_COLUMN_RATIOS);
 
         // Prepare node info
         let mut node_info: Vec<(i32, f64, f64, f64, u128, String)> = self
             .display_counters.clone()
             .into_iter()
-            .map(|e,| {
+            .map(|e| {
                 let recv_bw = get_bw(&e.1, "rcv_bytes", &self.counter_mode);
                 let xmt_bw = get_bw(&e.1, "xmt_bytes", &self.counter_mode);
                 let xmit_waits = get_bw_loss(&e.1, "xmit_waits", &self.counter_mode);
@@ -411,9 +430,7 @@ impl App {
             .enumerate()
             .skip(offset)
             .take(visible_rows)
-            .map(|(idx, (
-                port, r_bw, x_bw, waits, errs, err_str)
-                )| {
+            .map(|(idx, (port, r_bw, x_bw, waits, errs, err_str))| {
                 let mut row = Row::new(vec![
                     Cell::from(format!("{}", port)),
                     Cell::from(format!("{:.2}", r_bw)),
@@ -422,6 +439,8 @@ impl App {
                     Cell::from(format!("{}", errs)),
                     Cell::from(truncate_fit(err_str, widths[7])),
                 ]);
+                
+                // Highlight the selected row in the popup
                 if self.popup_selected == idx {
                     row = row.style(Style::default().bg(Color::Blue));
                 }

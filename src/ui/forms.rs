@@ -35,7 +35,7 @@ impl SearchForm {
     pub fn cursor_offset(&self) -> Offset {
         let x = (self.value.len() + 1) as i32;
         Offset{
-            x: x,
+            x,
             y: 0,
         }
     }
