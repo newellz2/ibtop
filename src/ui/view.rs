@@ -34,7 +34,7 @@ use super::helpers::{
 const MAIN_TABLE_COLUMN_RATIOS: [f64; 8] = [0.04, 0.32, 0.04, 0.12, 0.12, 0.12, 0.12, 0.12];
 
 // Column ratios for the details popup table layout
-const DETAILS_TABLE_COLUMN_RATIOS: [f64; 8] = [0.0, 0.0, 0.5, 0.18, 0.18, 0.18, 0.18, 0.23];
+const DETAILS_TABLE_COLUMN_RATIOS: [f64; 8] = [0.0, 0.04, 0.32, 0.12, 0.12, 0.12, 0.12, 0.16];
 
 impl Widget for &App {
     // Renders the user interface widgets.
@@ -399,10 +399,15 @@ impl App {
         let widths = compute_column_widths(inner_area.width, &DETAILS_TABLE_COLUMN_RATIOS);
 
         // Prepare node info
-        let mut node_info: Vec<(i32, f64, f64, f64, u128, String)> = self
+        let mut node_info: Vec<(i32, String, f64, f64, f64, u128, String)> = self
             .display_counters.clone()
             .into_iter()
             .map(|e| {
+                let node_desc = self.nodes.iter()
+                    .find(|n| n.lid == e.0.0)
+                    .and_then(|n| n.ports.iter().find(|p| p.number == e.0.1))
+                    .map(|p| p.remote_node_description.clone())
+                    .unwrap_or("".to_string());
                 let recv_bw = get_bw(&e.1, "rcv_bytes", &self.counter_mode);
                 let xmt_bw = get_bw(&e.1, "xmt_bytes", &self.counter_mode);
                 let xmit_waits = get_bw_loss(&e.1, "xmit_waits", &self.counter_mode);
@@ -410,6 +415,7 @@ impl App {
                 let error_strings =  get_error_strings(&e.1);
                 (
                     e.0.1,
+                    node_desc,
                     recv_bw,
                     xmt_bw,
                     xmit_waits,
@@ -430,9 +436,10 @@ impl App {
             .enumerate()
             .skip(offset)
             .take(visible_rows)
-            .map(|(idx, (port, r_bw, x_bw, waits, errs, err_str))| {
+            .map(|(idx, (port, node_desc, r_bw, x_bw, waits, errs, err_str))| {
                 let mut row = Row::new(vec![
                     Cell::from(format!("{}", port)),
+                    Cell::from(truncate_fit(node_desc, widths[2])),
                     Cell::from(format!("{:.2}", r_bw)),
                     Cell::from(format!("{:.2}", x_bw)),
                     Cell::from(format!("{:.2}", waits)),
@@ -449,6 +456,7 @@ impl App {
 
         let header_cells = vec![
             Cell::from(format!("PT")),
+            Cell::from(format!("NODE")),
             Cell::from(format!("RECV_BW")),
             Cell::from(format!("SEND_BW")),
             Cell::from(format!("BW_LOSS")),
@@ -464,6 +472,7 @@ impl App {
         );
 
         let constraints = [
+            Constraint::Length(widths[1] as u16),
             Constraint::Length(widths[2] as u16),
             Constraint::Length(widths[3] as u16),
             Constraint::Length(widths[4] as u16),

@@ -115,7 +115,16 @@ impl DiscoverService for RsmadDiscoveryService {
                     let ports = match &nd_ref.ports {
                         Some(ports) => ports.iter().map(|p| {
                             let p_ref = p.as_ref().borrow();
-                            Port { number: p_ref.number }
+                            let mut remote_desc = "".to_string();
+                            if let Some(remote_node_weak) = &p_ref.remote_node {
+                                if let Some(remote_node_ref) = remote_node_weak.upgrade() {
+                                    remote_desc = remote_node_ref.borrow().node_desc.clone();
+                                }
+                            }
+                            Port { 
+                                number: p_ref.number,
+                                remote_node_description: remote_desc,
+                            }
                         }).collect(),
                         None => Vec::new(),
                     };

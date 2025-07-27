@@ -40,6 +40,7 @@ pub struct Node {
 #[derive(Clone, Debug)]
 pub struct Port {
     pub number: i32,
+    pub remote_node_description: String,
 }
 
 #[derive(Clone, Debug)]
@@ -111,7 +112,8 @@ impl DiscoverService for TestDiscoverService{
             let mut ports: Vec<Port> = Vec::new();
             for port_num in 0..self.ports_per_node {
                 ports.push(Port {
-                    number: port_num as i32
+                    number: port_num as i32,
+                    remote_node_description: "".to_string(),
                 });
             }
             
