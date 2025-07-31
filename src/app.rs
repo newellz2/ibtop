@@ -296,6 +296,10 @@ impl App {
                         KeyEvent { code: KeyCode::Esc, .. }
                         | KeyEvent { code: KeyCode::Enter, .. } => {
                             self.active_popup = Popup::None;
+                            if !self.nodes.is_empty() {
+                                self.selected = 0;
+                                self.set_selected_node_guid();
+                            }
                         }
 
                         // Other key presses go to the search field
