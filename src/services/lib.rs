@@ -5,6 +5,7 @@ use std::{
 };
 
 use chrono::Utc;
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use crate::app::AppConfig;
 use super::rsmad::ERROR_COUNTERS;
 
@@ -140,7 +141,7 @@ impl TestCountersService {
     pub fn new(
         ev_ctr_rx: Receiver<CounterEvent>,
         ctr_ev_tx: Sender<CounterEvent>, 
-        config: AppConfig
+        _config: AppConfig
     ) -> Self {
 
         Self {
@@ -179,6 +180,7 @@ impl CountersService for TestCountersService{
 
     fn get_counters(&self, lid_ports: Vec<LidPort>) -> HashMap<(u16, i32), HashMap<String, u64>>{
 
+        let mut rng = StdRng::from_entropy();
         let mut counters: HashMap<(u16, i32), HashMap<String, u64>> = HashMap::new();
 
         // Calculate a base value using the elapsed time since service start.
@@ -198,7 +200,7 @@ impl CountersService for TestCountersService{
             let rcv_bytes = base.saturating_mul(100_000).saturating_mul((lp.lid as i32 + lp.number) as u64);
             node_counters.insert("rcv_bytes".to_string(), rcv_bytes);
 
-            let xmit_waits = base.saturating_mul(10_000).saturating_mul((lp.lid as i32 + lp.number) as u64);
+            let xmit_waits = rng.gen_range(0..1_000_000_000) + (elapsed / 10);
             node_counters.insert("xmit_waits".to_string(), xmit_waits);
 
             node_counters.insert(
@@ -214,7 +216,7 @@ impl CountersService for TestCountersService{
             let _: Vec<_> = ERROR_COUNTERS
                 .iter()
                 .map(|&err_ctr| {
-                    let err_cnt = base.saturating_mul(lp.lid as u64);
+                    let err_cnt = (rng.gen_range(0..=1) * lp.lid) as u64;
                     node_counters.insert(err_ctr.to_string(), err_cnt);
                 }).collect();
 

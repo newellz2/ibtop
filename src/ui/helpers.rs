@@ -5,10 +5,13 @@ use ratatui::layout::Rect;
 use crate::{app::CounterMode, services};
 
 pub(crate) fn truncate_fit(s: &str, max_width: usize) -> String {
-    if s.len() > max_width {
-        let mut truncated = s[..(max_width.saturating_sub(1))].to_string();
-        truncated.push('…');
-        truncated
+    // Use character boundaries to avoid panics on UTF-8 slicing.
+    // This does not perfectly match terminal cell width, but is safe and sufficient.
+    let char_count = s.chars().count();
+    if char_count > max_width {
+        let keep = max_width.saturating_sub(1);
+        let truncated: String = s.chars().take(keep).collect();
+        format!("{truncated}…")
     } else {
         s.to_string()
     }

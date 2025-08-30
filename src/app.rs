@@ -45,7 +45,7 @@ pub enum Popup {
     Details,
 }
 
-#[derive(Debug, Default, serde_derive::Deserialize, PartialEq, Clone)]
+#[derive(Debug, Default, serde::Deserialize, PartialEq, Clone)]
 pub struct AppConfig {
     pub hca: String,
     pub pkey: u32,
@@ -64,7 +64,7 @@ pub struct App {
     pub nodes: Vec<Node>,
 
     /// Selected Node
-    pub selected_guid: Option<u64>,
+    pub selected_node: Option<(u64, u16, String, u16, f64, f64, f64, u128, String)>,
 
     /// Counters
     pub display_counters: HashMap<(u16, i32), HashMap<String, u64>>,
@@ -116,33 +116,25 @@ pub struct App {
 impl App {
     ///  Constructor
     pub fn new(args: Args) -> Self {
-        let config = Config::builder()
-        .add_source(
-            config::Environment::with_prefix("IBTOP")
-                .try_parsing(true)
-                .separator("_")
-                .list_separator(" "),
-        )
-        .build()
-        .unwrap();
-
-        let app_config: AppConfig = match config.try_deserialize() {
-            Ok(c) =>{
-                c
-            }
-            Err(_)=> {
-                AppConfig{
-                    hca: args.hca,
-                    timeout: args.timeout,
-                    retries: args.retries,
-                    threads: args.threads,
-                    pkey: args.pkey,
-                    update_interval: args.update_interval,
-                    include_hcas: args.include_hcas,
-                    service_type: args.service_type,
-                }
-            }
-        };
+        let app_config: AppConfig = Config::builder()
+            .add_source(
+                config::Environment::with_prefix("IBTOP")
+                    .try_parsing(true)
+                    .separator("_")
+                    .list_separator(" "),
+            )
+            .build()
+            .and_then(|c| c.try_deserialize())
+            .unwrap_or_else(|_| AppConfig {
+                hca: args.hca,
+                timeout: args.timeout,
+                retries: args.retries,
+                threads: args.threads,
+                pkey: args.pkey,
+                update_interval: args.update_interval,
+                include_hcas: args.include_hcas,
+                service_type: args.service_type,
+            });
 
         let mut app = App {
             config: app_config.clone(),
@@ -151,7 +143,7 @@ impl App {
             search_form: SearchForm::new("Search"),
             node_details_form: NodeDetailsForm::new("Details"),
             nodes: Vec::new(),
-            selected_guid: None,
+            selected_node: None,
             display_counters: HashMap::new(),
             current_counters: HashMap::new(),
             previous_counters: HashMap::new(),
@@ -326,7 +318,6 @@ impl App {
 
                                 let vis = self.visible_rows.get().max(1);
                                 let max_offset = self.display_counters.len().saturating_sub(vis);
-                                self.status = format!("{}", max_offset);
 
                                 if self.popup_selected >= self.popup_table_offset + vis {
                                     self.popup_table_offset = (self.popup_table_offset + 1).min(max_offset);
@@ -459,16 +450,10 @@ impl App {
                 ..
             } => {
                 if !self.nodes.is_empty() {
-                    let max_idx = self.nodes.len().saturating_sub(1);
+                    let max_idx = self.filtered_len().saturating_sub(1);
                     self.selected = (self.selected + 1).min(max_idx);
-
                     self.set_selected_node_guid();
-
-                    let vis = self.visible_rows.get().max(1);
-                    let max_offset = self.nodes.len().saturating_sub(vis);
-                    if self.selected >= self.table_offset + vis {
-                        self.table_offset = (self.table_offset + 1).min(max_offset);
-                    }
+                    self.ensure_selected_visible();
                 }
             }
 
@@ -478,17 +463,51 @@ impl App {
                 ..
             } => {
                 if !self.nodes.is_empty() {
-
                     if self.selected > 0 {
                         self.selected -= 1;
                     }
-
-                    if self.selected < self.table_offset {
-                        self.table_offset = self.table_offset.saturating_sub(1);
-                    }
-
                     self.set_selected_node_guid();
+                    self.ensure_selected_visible();
+                }
+            }
 
+            // Page down
+            KeyEvent { code: KeyCode::PageDown, .. } => {
+                if !self.nodes.is_empty() {
+                    let vis = self.visible_rows.get().max(1);
+                    let len = self.filtered_len();
+                    self.selected = (self.selected + vis).min(len.saturating_sub(1));
+                    self.set_selected_node_guid();
+                    self.ensure_selected_visible();
+                }
+            }
+
+            // Page up
+            KeyEvent { code: KeyCode::PageUp, .. } => {
+                if !self.nodes.is_empty() {
+                    let vis = self.visible_rows.get().max(1);
+                    self.selected = self.selected.saturating_sub(vis);
+                    self.set_selected_node_guid();
+                    self.ensure_selected_visible();
+                }
+            }
+
+            // Home (go to first row)
+            KeyEvent { code: KeyCode::Home, .. } => {
+                if !self.nodes.is_empty() {
+                    self.selected = 0;
+                    self.set_selected_node_guid();
+                    self.ensure_selected_visible();
+                }
+            }
+
+            // End (go to last row)
+            KeyEvent { code: KeyCode::End, .. } => {
+                if !self.nodes.is_empty() {
+                    let len = self.filtered_len();
+                    self.selected = len.saturating_sub(1);
+                    self.set_selected_node_guid();
+                    self.ensure_selected_visible();
                 }
             }
 
@@ -497,7 +516,9 @@ impl App {
                 code: KeyCode::Enter,
                 ..
             } => {
-                if self.selected_guid.is_some() {
+                self.set_selected_node_guid();
+
+                if self.selected_node.is_some() {
                     self.display_counters.clear();
                     self.current_counters.clear();
                     self.previous_counters.clear();
@@ -546,10 +567,10 @@ impl App {
 
             Popup::Details => {
 
-                match self.selected_guid {
-                    Some(guid) => {
+                match &self.selected_node {
+                    Some(node) => {
                         
-                        let node_option = self.nodes.iter().find(|n| n.guid == guid);
+                        let node_option = self.nodes.iter().find(|n| n.guid == node.0);
 
                         match node_option {
                             Some(node) => {
@@ -678,11 +699,41 @@ impl App {
         self.running = false;
     }
 
+    /// Number of rows after applying the current filter
+    fn filtered_len(&self) -> usize {
+        let re = regex::RegexBuilder::new(&self.search_form.value)
+            .case_insensitive(true)
+            .build()
+            .unwrap_or_else(|_| regex::Regex::new("").unwrap());
+        self
+            .nodes
+            .iter()
+            .filter(|n| re.is_match(&n.node_description))
+            .count()
+    }
+
+    /// Keep `table_offset` in sync so the selected row stays visible.
+    fn ensure_selected_visible(&mut self) {
+        let vis = self.visible_rows.get().max(1);
+        let len = self.filtered_len();
+        let max_offset = len.saturating_sub(vis);
+
+        if self.selected < self.table_offset {
+            self.table_offset = self.selected.min(max_offset);
+        } else if self.selected >= self.table_offset + vis {
+            let new_offset = (self.selected + 1).saturating_sub(vis);
+            self.table_offset = new_offset.min(max_offset);
+        } else {
+            self.table_offset = self.table_offset.min(max_offset);
+        }
+    }
+
     fn set_selected_node_guid(&mut self) {
         // Create regex for filtering, defaulting to empty string if invalid
-        let re = regex::Regex::new(&self.search_form.value).unwrap_or_else(|_| {
-            regex::Regex::new("").unwrap()
-        });
+        let re = regex::RegexBuilder::new(&self.search_form.value)
+            .case_insensitive(true)
+            .build()
+            .unwrap_or_else(|_| regex::Regex::new("").unwrap());
 
         // Filter and gather node information
         let mut node_info: Vec<(u64, u16, String, u16, f64, f64, f64, u128, String)> = self
@@ -738,12 +789,16 @@ impl App {
             }
         });
 
-        // Set the selected GUID if we have a valid selection
+        // Clamp selection to available rows and set the selected GUID
+        if self.selected >= node_info.len() {
+            self.selected = node_info.len().saturating_sub(1);
+        }
+
         if let Some(selected_node) = node_info.get(self.selected) {
-            self.selected_guid = Some(selected_node.0);
+            self.selected_node = Some(selected_node.clone());
         } else {
             // Clear selection if no valid node found
-            self.selected_guid = None;
+            self.selected_node = None;
         }
     }
 }

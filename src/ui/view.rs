@@ -144,12 +144,32 @@ impl App {
 
         Paragraph::new(header_mid_text).render(header_layout[1], buf);
 
-        // Right Header
+        // Right Header: show sort and active filter
+        let sort_name = match self.sort_column {
+            1 => "LID",
+            2 => "NODE",
+            3 => "PT",
+            4 => "RECV_BW",
+            5 => "SEND_BW",
+            6 => "BW_LOSS",
+            7 => "ERR_CNT",
+            8 => "ERR_STR",
+            _ => "None",
+        };
+        let sort_text = if self.sort_column >= 1 {
+            format!("{}{}", sort_name, self.get_sort_indicator(self.sort_column))
+        } else {
+            "None".to_string()
+        };
         let header_right_text = vec![
             Line::from(vec![
-                Span::from("".green()),
+                Span::from("Sort: ".green()),
+                Span::from(sort_text),
             ]),
-
+            Line::from(vec![
+                Span::from("Filter: ".green()),
+                Span::from(self.search_form.value.clone()),
+            ]),
         ];
 
         Paragraph::new(header_right_text).render(header_layout[2], buf);
@@ -161,10 +181,11 @@ impl App {
     /// Supports filtering by search term and sorting by any column.
     fn render_nodes_table(&self, area: Rect, buf: &mut Buffer) {
 
-        // Create regex for filtering, defaulting to empty string if invalid
-        let re = regex::Regex::new(&self.search_form.value).unwrap_or_else(|_| {
-            regex::Regex::new("").unwrap()
-        });
+        // Create case-insensitive regex for filtering, defaulting to empty string if invalid
+        let re = regex::RegexBuilder::new(&self.search_form.value)
+            .case_insensitive(true)
+            .build()
+            .unwrap_or_else(|_| regex::Regex::new("").unwrap());
 
         // Filter and gather node information
         let mut node_info: Vec<(u64, u16, String, u16, f64, f64, f64, u128, String)> = self
@@ -243,9 +264,11 @@ impl App {
 
         let visible_rows = area.height.saturating_sub(1) as usize;
         self.visible_rows.set(visible_rows);
+        // Compute a local selection index clamped to filtered data size
+        let selected_idx = self.selected.min(node_info.len().saturating_sub(1));
         let offset = self.table_offset.min(node_info.len().saturating_sub(visible_rows));
 
-        let rows = node_info
+        let mut rows = node_info
             .iter()
             .enumerate()
             .skip(offset)
@@ -261,13 +284,31 @@ impl App {
                     Cell::from(format!("{}", errs)),
                     Cell::from(truncate_fit(err_str, widths[7])),
                 ]);
-                
+                // Zebra striping for readability (non-selected rows)
+                if selected_idx != idx && idx % 2 == 1 {
+                    row = row.style(Style::default().bg(Color::Rgb(32, 32, 32)));
+                }
                 // Highlight the selected row
-                if self.selected == idx {
-                    row = row.style(Style::default().bg(Color::Blue));
+                if selected_idx == idx {
+                    row = row.style(Style::default().bg(Color::LightBlue));
                 }
                 row
-            });
+            })
+            .collect::<Vec<_>>();
+
+        // If no rows match, show a friendly message row
+        if rows.is_empty() {
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from("No matching nodes"),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+            ]));
+        }
         
 
         let constraints = [
@@ -339,6 +380,7 @@ impl App {
         let right_footer_text = vec![
             Line::from(" s = Sort".green()),
             Line::from(" S = Sort Asc/Desc".green()),
+            //Line::from(" PgUp/PgDn/Home/End = Navigate".green()),
         ];
 
         Paragraph::new(right_footer_text)
@@ -372,7 +414,7 @@ impl App {
 
     fn render_details_popup(&self, area: Rect, buf: &mut Buffer) {
         // Don't render details popup if no node is selected
-        if self.selected_guid.is_none() {
+        if self.selected_node.is_none() {
             return;
         }
 
@@ -391,8 +433,20 @@ impl App {
 
         Clear.render(rect, buf);
 
+        let node = self.selected_node.clone().unwrap_or(
+            (0, 0, "".to_owned(), 0, 0.0, 0.0, 0.0, 0, "".to_owned())
+        );
+
+        let title = format!(
+            "Details - Index: {}, GUID: 0x{}, Lid: {}, Desc: {}",
+            self.selected,
+            node.0,
+            node.1,
+            node.2
+        );
+
         let block = Block::new()
-            .title("Details")
+            .title(title)
             .borders(Borders::ALL);
 
         let inner_area = block.inner(rect);
@@ -400,27 +454,29 @@ impl App {
 
         // Prepare node info
         let mut node_info: Vec<(i32, String, f64, f64, f64, u128, String)> = self
-            .display_counters.clone()
-            .into_iter()
-            .map(|e| {
-                let node_desc = self.nodes.iter()
-                    .find(|n| n.lid == e.0.0)
-                    .and_then(|n| n.ports.iter().find(|p| p.number == e.0.1))
+            .display_counters
+            .iter()
+            .map(|(&(lid, port), ctrs)| {
+                let node_desc = self
+                    .nodes
+                    .iter()
+                    .find(|n| n.lid == lid)
+                    .and_then(|n| n.ports.iter().find(|p| p.number == port))
                     .map(|p| p.remote_node_description.clone())
                     .unwrap_or("".to_string());
-                let recv_bw = get_bw(&e.1, "rcv_bytes", &self.counter_mode);
-                let xmt_bw = get_bw(&e.1, "xmt_bytes", &self.counter_mode);
-                let xmit_waits = get_bw_loss(&e.1, "xmit_waits", &self.counter_mode);
-                let error_count = count_errors(&e.1);
-                let error_strings =  get_error_strings(&e.1);
+                let recv_bw = get_bw(ctrs, "rcv_bytes", &self.counter_mode);
+                let xmt_bw = get_bw(ctrs, "xmt_bytes", &self.counter_mode);
+                let xmit_waits = get_bw_loss(ctrs, "xmit_waits", &self.counter_mode);
+                let error_count = count_errors(ctrs);
+                let error_strings = get_error_strings(ctrs);
                 (
-                    e.0.1,
+                    port,
                     node_desc,
                     recv_bw,
                     xmt_bw,
                     xmit_waits,
                     error_count,
-                    error_strings
+                    error_strings,
                 )
             })
             .collect();
@@ -431,7 +487,7 @@ impl App {
         self.visible_rows.set(visible_rows);
         let offset = self.popup_table_offset.min(node_info.len().saturating_sub(visible_rows));
 
-        let rows = node_info
+        let mut rows = node_info
             .iter()
             .enumerate()
             .skip(offset)
@@ -446,13 +502,29 @@ impl App {
                     Cell::from(format!("{}", errs)),
                     Cell::from(truncate_fit(err_str, widths[7])),
                 ]);
-                
+                // Zebra striping for readability (non-selected)
+                if self.popup_selected != idx && idx % 2 == 1 {
+                    row = row.style(Style::default().bg(Color::Rgb(32, 32, 32)));
+                }
                 // Highlight the selected row in the popup
                 if self.popup_selected == idx {
-                    row = row.style(Style::default().bg(Color::Blue));
+                    row = row.style(Style::default().bg(Color::LightBlue));
                 }
                 row
-            });
+            })
+            .collect::<Vec<_>>();
+
+        if rows.is_empty() {
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+            ]));
+        }
 
         let header_cells = vec![
             Cell::from(format!("PT")),
