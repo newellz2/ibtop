@@ -438,7 +438,7 @@ impl App {
         );
 
         let title = format!(
-            "Details - Index: {}, GUID: 0x{}, Lid: {}, Desc: {}",
+            "Details - Index: {}, GUID: 0x{:x}, Lid: {}, Desc: {}",
             self.selected,
             node.0,
             node.1,

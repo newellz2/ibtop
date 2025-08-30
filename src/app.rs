@@ -156,7 +156,7 @@ impl App {
             auto_update: false,
             auto_update_interval: app_config.update_interval,
             auto_update_counter: 0,
-            sort_column: -1,
+            sort_column: 0,
             sort_ascending: false,
             table_offset: 0,
             popup_table_offset: 0,
