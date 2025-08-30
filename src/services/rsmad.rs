@@ -230,7 +230,6 @@ impl RsmadCountersService {
         }
     }
 }
-
 impl CountersService for RsmadCountersService {
     fn get_counters(&self, lid_ports: Vec<LidPort>) -> HashMap<(u16, i32), HashMap<String, u64>> {
         // Initialize UMAD
@@ -264,55 +263,67 @@ impl CountersService for RsmadCountersService {
         };
 
         let counters: HashMap<(u16, i32), HashMap<String, u64>> = pool.install(|| {
-            lid_ports
-                .par_iter()
-                .filter_map(|lp| {
-                    // Each iteration attempts to open a port
-                    let port_result = rsmad::ibmad::mad_rpc_open_port(
-                        &hca, 
-                        &mgmt_classes
-                    );
+            let num_threads = rayon::current_num_threads().max(1);
+            let chunk_size = (lid_ports.len() / num_threads).max(1);
 
+            lid_ports
+                .par_chunks(chunk_size)
+                .map(|chunk| {
+                    let mut local_map: HashMap<(u16, i32), HashMap<String, u64>> = HashMap::new();
+
+                    // Open one MAD port per chunk and reuse it
+                    let port_result = rsmad::ibmad::mad_rpc_open_port(&hca, &mgmt_classes);
                     let mut port = match port_result {
                         Ok(p) => p,
                         Err(e) => {
-                            eprintln!("Failed to open port for LID {}: {e}", lp.lid);
-                            return None;
+                            eprintln!("Failed to open MAD port for chunk: {e}");
+                            return local_map;
                         }
                     };
 
-                    let start = Utc::now();
-                    let perfquery_res =
-                        rsmad::ibmad::perfquery(&port, lp.lid.into(), lp.number, 0, timeout);
-                    let end = Utc::now();
+                    for lp in chunk.iter() {
+                        let start = Utc::now();
+                        let perfquery_res = rsmad::ibmad::perfquery(
+                            &port,
+                            lp.lid.into(),
+                            lp.number,
+                            0,
+                            timeout,
+                        );
+                        let end = Utc::now();
 
-                    let result = match perfquery_res {
-                        Ok(mut perfctrs) => {
-                            // Add timestamps for bandwidth calculations
-                            perfctrs.counters.insert(
-                                "start_timestamp".to_string(),
-                                start.timestamp_nanos_opt().unwrap_or(0) as u64,
-                            );
-                            perfctrs.counters.insert(
-                                "end_timestamp".to_string(),
-                                end.timestamp_nanos_opt().unwrap_or(0) as u64,
-                            );
-                            Some(((lp.lid, lp.number), perfctrs.counters))
+                        match perfquery_res {
+                            Ok(mut perfctrs) => {
+                                perfctrs.counters.insert(
+                                    "start_timestamp".to_string(),
+                                    start.timestamp_nanos_opt().unwrap_or(0) as u64,
+                                );
+                                perfctrs.counters.insert(
+                                    "end_timestamp".to_string(),
+                                    end.timestamp_nanos_opt().unwrap_or(0) as u64,
+                                );
+                                local_map.insert((lp.lid, lp.number), perfctrs.counters);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "Failed to query performance counters for LID {} port {}: {e}",
+                                    lp.lid, lp.number
+                                );
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("Failed to query performance counters for LID {} port {}: {e}", lp.lid, lp.number);
-                            None
-                        }
-                    };
-
-                    // Always close the port
-                    if let Err(e) = rsmad::ibmad::mad_rpc_close_port(&mut port) {
-                        eprintln!("Failed to close port for LID {}: {e}", lp.lid);
                     }
 
-                    result
+                    // Close the MAD port for this chunk
+                    if let Err(e) = rsmad::ibmad::mad_rpc_close_port(&mut port) {
+                        eprintln!("Failed to close MAD port for chunk: {e}");
+                    }
+
+                    local_map
                 })
-                .collect()
+                .reduce(|| HashMap::new(), |mut a, b| {
+                    a.extend(b);
+                    a
+                })
         });
 
         rsmad::umad::umad_done();
