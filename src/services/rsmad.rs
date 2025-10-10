@@ -6,15 +6,13 @@ use std::{
 };
 use super::lib::{CounterEvent, CountersService, DiscoverService, DiscoveryEvent, Node};
 
-pub const ERROR_COUNTERS: [&str; 11] = [
+pub const ERROR_COUNTERS: [&str; 9] = [
     "symbol_errors",
     "link_recovers",
     "link_downed",
     "rcv_errors",
     "phys_rcv_errors",
     "switch_rel_errors",
-    "rcv_local_phy_errors",
-    "rcv_malformed_pkt_errors",
     "excess_overrun_errors",
     "vl15dropped",
     "qp1_drops",
