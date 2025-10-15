@@ -8,6 +8,7 @@ use ratatui::{
 
 use crate::{
     event::{AppEvent, Event, EventHandler}, services::lib::{CounterEvent, DiscoveryEvent, LidPort, Node}, 
+    scope::read_scope_file,
     ui::{forms::{NodeDetailsForm, SearchForm}, 
     helpers::{centered_rect_percent_w_lines_h, count_errors, get_bw, get_bw_loss, get_error_strings}}, Args
 };
@@ -55,6 +56,7 @@ pub struct AppConfig {
     pub include_hcas: bool,
     pub timeout: u32,
     pub retries: u32,
+    pub scope_file: Option<String>,
 }
 
 // Main application state.
@@ -134,6 +136,7 @@ impl App {
                 update_interval: args.update_interval,
                 include_hcas: args.include_hcas,
                 service_type: args.service_type,
+                scope_file: args.scope_file,
             });
 
         let mut app = App {
@@ -166,8 +169,14 @@ impl App {
             active_popup: Popup::None,
             events: EventHandler::new(app_config),
         };
-
-        app.discover_fabric();
+        if app.config.scope_file.is_some() {
+            let scope_file = app.config.scope_file.as_ref().unwrap();
+            app.status = format!("Using scope file");
+            let nodes = read_scope_file(&scope_file);
+            app.nodes.extend(nodes);
+        } else {
+            app.discover_fabric();
+        }
         app
     }
 
@@ -381,7 +390,18 @@ impl App {
                 code: KeyCode::Char('d'),
                 ..
             } => {
-                self.discover_fabric();
+                if self.config.scope_file.is_some() {
+                    self.status = "Scope file mode, skipping discovery.".into();
+                    let scope_file = self.config.scope_file.as_ref().unwrap();
+                    let nodes = read_scope_file(&scope_file);
+                    self.nodes = nodes;
+                    if !self.nodes.is_empty() {
+                        self.selected = 0;
+                        self.set_selected_node_guid();
+                    }
+                } else {
+                    self.discover_fabric();
+                }
             }
 
             // Update counters
@@ -801,6 +821,7 @@ impl App {
             self.selected_node = None;
         }
     }
+
 }
 
 /// Calculate the delta between two counter maps.

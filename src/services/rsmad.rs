@@ -231,6 +231,7 @@ impl RsmadCountersService {
 impl CountersService for RsmadCountersService {
     fn get_counters(&self, lid_ports: Vec<LidPort>) -> HashMap<(u16, i32), HashMap<String, u64>> {
         // Initialize UMAD
+        let pkey = self.config.pkey;
         let init_result = rsmad::umad::umad_init();
         if init_result != 0 {
             eprintln!("Failed to initialize UMAD: error code {}", init_result);
@@ -285,7 +286,7 @@ impl CountersService for RsmadCountersService {
                             &port,
                             lp.lid.into(),
                             lp.number,
-                            0,
+                            pkey,
                             timeout,
                         );
                         let end = Utc::now();

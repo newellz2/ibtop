@@ -6,6 +6,7 @@ pub mod app;
 pub mod event;
 pub mod ui;
 pub mod services;
+pub mod scope;
 
 
 #[derive(Parser, Debug)]
@@ -34,6 +35,9 @@ pub struct Args {
 
     #[arg(long, default_value_t = false)]
     pub include_hcas: bool,
+
+    #[arg(long)]
+    pub scope_file: Option<String>,
 
     #[arg(long, default_value_t = false)]
     pub verbose: bool,
