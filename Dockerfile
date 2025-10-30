@@ -1,20 +1,23 @@
-FROM ubuntu:24.04
+ARG UBUNTU_VERSION="22.04"
+FROM ubuntu:${UBUNTU_VERSION}
 
+ARG UBUNTU_VERSION
 ARG DOCA_PACKAGES=""
 ARG DOCA_VERSION=3.1.0
 
 ARG DOCA_PREPUBLISH=false
-ARG DOCA_DISTRO="ubuntu24.04"
-ARG DOCA_ARCH="arm64-sbsa"
+ARG DOCA_DISTRO="ubuntu${UBUNTU_VERSION}"
+ARG DOCA_ARCH="x86_64"
 
 # Avoid prompts from apt
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install basic dependencies
-RUN apt-get update && apt-get install -y \
+# Install basic dependencies and fix GPG/CA issues
+RUN apt-get update && \
+    apt-get install -y \
     curl \
     gnupg \
-    ca-certificates \
+    ubuntu-keyring \
     build-essential \
     pkg-config \
     git \
@@ -30,19 +33,24 @@ RUN echo "Installing DOCA ${DOCA_VERSION}..." && \
     fi && \
     DOCA_URL="${BASE_URL}/${DOCA_VERSION}/${DOCA_DISTRO}/${DOCA_ARCH}/" && \
     echo "Using DOCA URL: ${DOCA_URL}" && \
-    curl -fsSL ${BASE_URL}/GPG-KEY-Mellanox.pub | gpg --dearmor > /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub && \
+    # Download key first, then de-armor
+    curl -fsSL ${BASE_URL}/GPG-KEY-Mellanox.pub -o /tmp/GPG-KEY-Mellanox.pub && \
+    gpg --dearmor < /tmp/GPG-KEY-Mellanox.pub > /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub && \
+    rm /tmp/GPG-KEY-Mellanox.pub && \
     echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] ${DOCA_URL} ./" > /etc/apt/sources.list.d/doca.list && \
     cat /etc/apt/sources.list.d/doca.list && \
     apt-get update && \
+    # Running upgrade here is fine
     apt-get upgrade -y && \
     rm -rf /var/lib/apt/lists/*
 
-
-RUN apt-get update; \
+# Install DOCA packages and other dev libs
+# Combined the last apt-get update and install
+RUN apt-get update && \
     apt-get install -y ${DOCA_PACKAGES} \
     libibumad-dev \
     libibnetdisc-dev \
-    libibmad-dev  && \
+    libibmad-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Rust

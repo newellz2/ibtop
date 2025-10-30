@@ -6,6 +6,18 @@ Use the Up and Down arrow keys to scroll through the node table when the list ex
 
 ![image](https://github.com/user-attachments/assets/26ff51a4-d8c0-4b49-828d-b686f80fda39)
 
+Can be built with the following commands:
+```bash
+git clone git@github.com:newellz2/rsmad.git
+
+git clone git@github.com:newellz2/ibtop.git
+
+cd ibtop
+
+./build-docker.sh "3.1.0" "" "x86_64" "22.04"
+
+./ibtop --help
+```
 
 ## License
 
