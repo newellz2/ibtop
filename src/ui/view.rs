@@ -1,4 +1,3 @@
-
 use chrono::prelude::*;
 use ratatui::{
     buffer::Buffer,
@@ -8,26 +7,13 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, Widget},
 };
 
-use crate::{
-    app::{
-        App, 
-        Popup, 
-        DETAILS_POPUP_PERCENT_HEIGHT, 
-        DETAILS_POPUP_PERCENT_WIDTH, 
-        SEARCH_POPUP_LINES_HEIGHT, 
-        SEARCH_POPUP_PERCENT_WIDTH,
-        AGG_COUNTERS_PORT
-    }
-};
 use super::helpers::{
-    truncate_fit, 
-    compute_column_widths, 
-    get_bw, 
-    get_bw_loss, 
-    count_errors, 
-    get_error_strings,
-    centered_rect_percent,
-    centered_rect_percent_w_lines_h
+    centered_rect_percent, centered_rect_percent_w_lines_h, compute_column_widths, count_errors,
+    get_bw, get_bw_loss, get_error_strings, truncate_fit,
+};
+use crate::app::{
+    AGG_COUNTERS_PORT, App, DETAILS_POPUP_PERCENT_HEIGHT, DETAILS_POPUP_PERCENT_WIDTH, Popup,
+    SEARCH_POPUP_LINES_HEIGHT, SEARCH_POPUP_PERCENT_WIDTH,
 };
 
 // Column ratios for the main table layout
@@ -45,9 +31,9 @@ impl Widget for &App {
     //  - `render_footer`
     fn render(self, area: Rect, buf: &mut Buffer) {
         let layout = Layout::vertical([
-            Constraint::Length(3),     // Header
+            Constraint::Length(3),       // Header
             Constraint::Percentage(100), // Node Table
-            Constraint::Length(3),     // Footer
+            Constraint::Length(3),       // Footer
         ])
         .split(area);
 
@@ -62,32 +48,28 @@ impl Widget for &App {
 
         // Render popup
         match self.active_popup {
-            Popup::None => {},
+            Popup::None => {}
             Popup::Search => {
                 self.render_search_popup(area, buf);
-            },
+            }
             Popup::Details => {
                 self.render_details_popup(area, buf);
-            },
+            }
         }
     }
 }
 
 impl App {
     /// Returns the sort indicator symbol for a given column.
-    /// 
+    ///
     /// # Arguments
     /// * `col_idx` - The column index to get the sort indicator for
-    /// 
+    ///
     /// # Returns
     /// A string containing the sort indicator ("▲" for ascending, "▼" for descending, or empty)
     fn get_sort_indicator(&self, col_idx: i32) -> &'static str {
         if self.sort_column == col_idx {
-            if self.sort_ascending {
-                "▲"
-            } else {
-                "▼"
-            }
+            if self.sort_ascending { "▲" } else { "▼" }
         } else {
             ""
         }
@@ -109,9 +91,7 @@ impl App {
             Line::from("ibtop".green()),
             Line::from(vec![
                 Span::from("HCA:    ".green()),
-                Span::from(
-                    &self.config.hca
-                ),
+                Span::from(&self.config.hca),
             ]),
             Line::from(vec![
                 Span::from("Status: ".green()),
@@ -162,10 +142,7 @@ impl App {
             "None".to_string()
         };
         let header_right_text = vec![
-            Line::from(vec![
-                Span::from("Sort: ".green()),
-                Span::from(sort_text),
-            ]),
+            Line::from(vec![Span::from("Sort: ".green()), Span::from(sort_text)]),
             Line::from(vec![
                 Span::from("Filter: ".green()),
                 Span::from(self.search_form.value.clone()),
@@ -176,11 +153,10 @@ impl App {
     }
 
     /// Render the main node table section that shows node information and performance metrics.
-    /// 
+    ///
     /// Displays columns for: LID, NODE, PORTS, RECV_BW, SEND_BW, BW_LOSS, ERRORS.
     /// Supports filtering by search term and sorting by any column.
     fn render_nodes_table(&self, area: Rect, buf: &mut Buffer) {
-
         // Create case-insensitive regex for filtering, defaulting to empty string if invalid
         let re = regex::RegexBuilder::new(&self.search_form.value)
             .case_insensitive(true)
@@ -195,17 +171,16 @@ impl App {
             .map(|n| {
                 let counters = self.display_counters.get(&(n.lid, AGG_COUNTERS_PORT));
 
-                let recv_bw = counters
-                    .map_or(0.0, |ctrs| get_bw(ctrs, "rcv_bytes", &self.counter_mode));
-                let xmt_bw = counters
-                    .map_or(0.0, |ctrs| get_bw(ctrs, "xmt_bytes", &self.counter_mode));
-                let xmit_waits = counters
-                    .map_or(0.0, |ctrs| get_bw_loss(ctrs, "xmit_waits", &self.counter_mode));
-                let error_count = counters
-                    .map_or(0, |ctrs| count_errors(ctrs));
-                let error_strings = counters
-                    .map_or("".to_string(), |ctrs| get_error_strings(ctrs));
-                
+                let recv_bw =
+                    counters.map_or(0.0, |ctrs| get_bw(ctrs, "rcv_bytes", &self.counter_mode));
+                let xmt_bw =
+                    counters.map_or(0.0, |ctrs| get_bw(ctrs, "xmt_bytes", &self.counter_mode));
+                let xmit_waits = counters.map_or(0.0, |ctrs| {
+                    get_bw_loss(ctrs, "xmit_waits", &self.counter_mode)
+                });
+                let error_count = counters.map_or(0, |ctrs| count_errors(ctrs));
+                let error_strings = counters.map_or("".to_string(), |ctrs| get_error_strings(ctrs));
+
                 (
                     n.guid,
                     n.lid,
@@ -215,7 +190,7 @@ impl App {
                     xmt_bw,
                     xmit_waits,
                     error_count,
-                    error_strings
+                    error_strings,
                 )
             })
             .collect();
@@ -223,14 +198,14 @@ impl App {
         // Sort based on `self.sort_column`
         node_info.sort_by(|a, b| {
             let ordering = match self.sort_column {
-                1 => a.1.cmp(&b.1),           // LID
-                2 => a.2.cmp(&b.2),           // Description
-                3 => a.3.cmp(&b.3),           // Port count
+                1 => a.1.cmp(&b.1),                                              // LID
+                2 => a.2.cmp(&b.2),                                              // Description
+                3 => a.3.cmp(&b.3),                                              // Port count
                 4 => a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal), // Receive BW
                 5 => a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal), // Transmit BW
                 6 => a.6.partial_cmp(&b.6).unwrap_or(std::cmp::Ordering::Equal), // Xmit waits
-                7 => a.7.cmp(&b.7),           // Error count
-                8 => a.8.cmp(&b.8),           // Error strings
+                7 => a.7.cmp(&b.7),                                              // Error count
+                8 => a.8.cmp(&b.8),                                              // Error strings
                 _ => std::cmp::Ordering::Equal,
             };
 
@@ -266,34 +241,38 @@ impl App {
         self.visible_rows.set(visible_rows);
         // Compute a local selection index clamped to filtered data size
         let selected_idx = self.selected.min(node_info.len().saturating_sub(1));
-        let offset = self.table_offset.min(node_info.len().saturating_sub(visible_rows));
+        let offset = self
+            .table_offset
+            .min(node_info.len().saturating_sub(visible_rows));
 
         let mut rows = node_info
             .iter()
             .enumerate()
             .skip(offset)
             .take(visible_rows)
-            .map(|(idx, (_guid, lid, desc, ports, r_bw, x_bw, waits, errs, err_str))| {
-                let mut row = Row::new(vec![
-                    Cell::from(format!("{}", lid)),
-                    Cell::from(truncate_fit(desc, widths[1])),
-                    Cell::from(format!("{}", ports)),
-                    Cell::from(format!("{:.2}", r_bw)),
-                    Cell::from(format!("{:.2}", x_bw)),
-                    Cell::from(format!("{:.2}", waits)),
-                    Cell::from(format!("{}", errs)),
-                    Cell::from(truncate_fit(err_str, widths[7])),
-                ]);
-                // Zebra striping for readability (non-selected rows)
-                if selected_idx != idx && idx % 2 == 1 {
-                    row = row.style(Style::default().bg(Color::Rgb(32, 32, 32)));
-                }
-                // Highlight the selected row
-                if selected_idx == idx {
-                    row = row.style(Style::default().bg(Color::LightBlue));
-                }
-                row
-            })
+            .map(
+                |(idx, (_guid, lid, desc, ports, r_bw, x_bw, waits, errs, err_str))| {
+                    let mut row = Row::new(vec![
+                        Cell::from(format!("{}", lid)),
+                        Cell::from(truncate_fit(desc, widths[1])),
+                        Cell::from(format!("{}", ports)),
+                        Cell::from(format!("{:.2}", r_bw)),
+                        Cell::from(format!("{:.2}", x_bw)),
+                        Cell::from(format!("{:.2}", waits)),
+                        Cell::from(format!("{}", errs)),
+                        Cell::from(truncate_fit(err_str, widths[7])),
+                    ]);
+                    // Zebra striping for readability (non-selected rows)
+                    if selected_idx != idx && idx % 2 == 1 {
+                        row = row.style(Style::default().bg(Color::Rgb(32, 32, 32)));
+                    }
+                    // Highlight the selected row
+                    if selected_idx == idx {
+                        row = row.style(Style::default().bg(Color::LightBlue));
+                    }
+                    row
+                },
+            )
             .collect::<Vec<_>>();
 
         // If no rows match, show a friendly message row
@@ -309,7 +288,6 @@ impl App {
                 Cell::from(""),
             ]));
         }
-        
 
         let constraints = [
             Constraint::Length(widths[0] as u16),
@@ -325,11 +303,10 @@ impl App {
         Table::new(rows, constraints)
             .header(header)
             .render(area, buf);
-
     }
 
     /// Render the footer section with keyboard shortcuts and application status.
-    /// 
+    ///
     /// Shows three columns with different categories of keyboard shortcuts
     /// and current application state information.
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
@@ -341,7 +318,9 @@ impl App {
         .split(area);
 
         // Left Footer
-        let left_footer_block = Block::new().border_type(BorderType::Plain).borders(Borders::TOP);
+        let left_footer_block = Block::new()
+            .border_type(BorderType::Plain)
+            .borders(Borders::TOP);
         let left_footer_text = vec![
             Line::from(" d = Fabric Discovery".green()),
             Line::from(" u = Update Counters".green()),
@@ -352,22 +331,18 @@ impl App {
             .render(footer_layout[0], buf);
 
         // Middle Footer
-        let mid_footer_block = Block::new().border_type(BorderType::Plain).borders(Borders::TOP);
+        let mid_footer_block = Block::new()
+            .border_type(BorderType::Plain)
+            .borders(Borders::TOP);
         let mid_footer_text = vec![
-            Line::from(
-                if self.auto_update {
-                    " U = Auto Update".yellow()
-                } else {
-                    " U = Auto Update".green()
-                }
-            ),
+            Line::from(if self.auto_update {
+                " U = Auto Update".yellow()
+            } else {
+                " U = Auto Update".green()
+            }),
             Line::from(vec![
-                Span::from(
-                    format!(" W/D/B = Whole/Delta/Baseline: ").green()
-                ),
-                Span::from(
-                    format!("{:?}", self.counter_mode)
-                )
+                Span::from(format!(" W/D/B = Whole/Delta/Baseline: ").green()),
+                Span::from(format!("{:?}", self.counter_mode)),
             ]),
         ];
 
@@ -376,7 +351,9 @@ impl App {
             .render(footer_layout[1], buf);
 
         // Right Footer
-        let right_footer_block = Block::new().border_type(BorderType::Plain).borders(Borders::TOP);
+        let right_footer_block = Block::new()
+            .border_type(BorderType::Plain)
+            .borders(Borders::TOP);
         let right_footer_text = vec![
             Line::from(" s = Sort".green()),
             Line::from(" S = Sort Asc/Desc".green()),
@@ -386,7 +363,6 @@ impl App {
         Paragraph::new(right_footer_text)
             .block(right_footer_block)
             .render(footer_layout[2], buf);
-
     }
 
     fn render_search_popup(&self, area: Rect, buf: &mut Buffer) {
@@ -397,16 +373,11 @@ impl App {
 
         let popup_info = centered_rect_percent_w_lines_h(
             SEARCH_POPUP_PERCENT_WIDTH,
-            SEARCH_POPUP_LINES_HEIGHT, 
-            area
+            SEARCH_POPUP_LINES_HEIGHT,
+            area,
         );
 
-        let rect = Rect::new(
-            popup_info.0, 
-            popup_info.1, 
-            popup_info.2, 
-            popup_info.3,
-        );
+        let rect = Rect::new(popup_info.0, popup_info.1, popup_info.2, popup_info.3);
 
         Clear.render(rect, buf);
         self.search_form.render(rect, buf);
@@ -420,34 +391,32 @@ impl App {
 
         let popup_info = centered_rect_percent(
             DETAILS_POPUP_PERCENT_WIDTH,
-            DETAILS_POPUP_PERCENT_HEIGHT, 
-            area
+            DETAILS_POPUP_PERCENT_HEIGHT,
+            area,
         );
 
-        let rect = Rect::new(
-            popup_info.0, 
-            popup_info.1, 
-            popup_info.2, 
-            popup_info.3,
-        );
+        let rect = Rect::new(popup_info.0, popup_info.1, popup_info.2, popup_info.3);
 
         Clear.render(rect, buf);
 
-        let node = self.selected_node.clone().unwrap_or(
-            (0, 0, "".to_owned(), 0, 0.0, 0.0, 0.0, 0, "".to_owned())
-        );
+        let node = self.selected_node.clone().unwrap_or((
+            0,
+            0,
+            "".to_owned(),
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0,
+            "".to_owned(),
+        ));
 
         let title = format!(
             "Details - Index: {}, GUID: 0x{:x}, Lid: {}, Desc: {}",
-            self.selected,
-            node.0,
-            node.1,
-            node.2
+            self.selected, node.0, node.1, node.2
         );
 
-        let block = Block::new()
-            .title(title)
-            .borders(Borders::ALL);
+        let block = Block::new().title(title).borders(Borders::ALL);
 
         let inner_area = block.inner(rect);
         let widths = compute_column_widths(inner_area.width, &DETAILS_TABLE_COLUMN_RATIOS);
@@ -485,33 +454,37 @@ impl App {
 
         let visible_rows = inner_area.height.saturating_sub(1) as usize;
         self.visible_rows.set(visible_rows);
-        let offset = self.popup_table_offset.min(node_info.len().saturating_sub(visible_rows));
+        let offset = self
+            .popup_table_offset
+            .min(node_info.len().saturating_sub(visible_rows));
 
         let mut rows = node_info
             .iter()
             .enumerate()
             .skip(offset)
             .take(visible_rows)
-            .map(|(idx, (port, node_desc, r_bw, x_bw, waits, errs, err_str))| {
-                let mut row = Row::new(vec![
-                    Cell::from(format!("{}", port)),
-                    Cell::from(truncate_fit(node_desc, widths[2])),
-                    Cell::from(format!("{:.2}", r_bw)),
-                    Cell::from(format!("{:.2}", x_bw)),
-                    Cell::from(format!("{:.2}", waits)),
-                    Cell::from(format!("{}", errs)),
-                    Cell::from(truncate_fit(err_str, widths[7])),
-                ]);
-                // Zebra striping for readability (non-selected)
-                if self.popup_selected != idx && idx % 2 == 1 {
-                    row = row.style(Style::default().bg(Color::Rgb(32, 32, 32)));
-                }
-                // Highlight the selected row in the popup
-                if self.popup_selected == idx {
-                    row = row.style(Style::default().bg(Color::LightBlue));
-                }
-                row
-            })
+            .map(
+                |(idx, (port, node_desc, r_bw, x_bw, waits, errs, err_str))| {
+                    let mut row = Row::new(vec![
+                        Cell::from(format!("{}", port)),
+                        Cell::from(truncate_fit(node_desc, widths[2])),
+                        Cell::from(format!("{:.2}", r_bw)),
+                        Cell::from(format!("{:.2}", x_bw)),
+                        Cell::from(format!("{:.2}", waits)),
+                        Cell::from(format!("{}", errs)),
+                        Cell::from(truncate_fit(err_str, widths[7])),
+                    ]);
+                    // Zebra striping for readability (non-selected)
+                    if self.popup_selected != idx && idx % 2 == 1 {
+                        row = row.style(Style::default().bg(Color::Rgb(32, 32, 32)));
+                    }
+                    // Highlight the selected row in the popup
+                    if self.popup_selected == idx {
+                        row = row.style(Style::default().bg(Color::LightBlue));
+                    }
+                    row
+                },
+            )
             .collect::<Vec<_>>();
 
         if rows.is_empty() {
@@ -553,11 +526,10 @@ impl App {
             Constraint::Length(widths[7] as u16),
         ];
 
-        let table = Table::new(rows, constraints)
-            .header(header);
+        let table = Table::new(rows, constraints).header(header);
 
         table.render(inner_area, buf);
-        
+
         block.render(rect, buf);
     }
 }

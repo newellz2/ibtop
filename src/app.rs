@@ -3,14 +3,22 @@ use std::{cell::Cell, cmp::Ordering, collections::HashMap};
 use chrono::{DateTime, Utc};
 use config::Config;
 use ratatui::{
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers}, layout::Offset, DefaultTerminal
+    DefaultTerminal,
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    layout::Offset,
 };
 
 use crate::{
-    event::{AppEvent, Event, EventHandler}, services::lib::{CounterEvent, DiscoveryEvent, LidPort, Node}, 
+    Args,
+    event::{AppEvent, Event, EventHandler},
     scope::read_scope_file,
-    ui::{forms::{NodeDetailsForm, SearchForm}, 
-    helpers::{centered_rect_percent_w_lines_h, count_errors, get_bw, get_bw_loss, get_error_strings}}, Args
+    services::lib::{CounterEvent, DiscoveryEvent, LidPort, Node},
+    ui::{
+        forms::{NodeDetailsForm, SearchForm},
+        helpers::{
+            centered_rect_percent_w_lines_h, count_errors, get_bw, get_bw_loss, get_error_strings,
+        },
+    },
 };
 
 pub const SEARCH_POPUP_PERCENT_WIDTH: u16 = 60;
@@ -33,7 +41,6 @@ pub enum CounterMode {
     /// Display values relative to a baseline
     Baseline,
 }
-
 
 /// Represents the currently active popup dialog.
 #[derive(Debug, PartialEq)]
@@ -183,42 +190,40 @@ impl App {
     /// Run the application, drawing the UI and handling events until it is no longer `running`.
     pub fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
         while self.running {
-
-            match self.active_popup{
+            match self.active_popup {
                 Popup::None => {
                     let _ = terminal.hide_cursor();
-                },
+                }
                 Popup::Details => {
                     let _ = terminal.hide_cursor();
-                },
+                }
                 Popup::Search => {
                     let _ = terminal.show_cursor();
-                },
+                }
             }
 
             // Render the UI
             terminal.draw(|frame| {
-
                 let area = frame.area();
 
                 match self.active_popup {
-
-                    Popup::Search => { // Seatrch Popup
+                    Popup::Search => {
+                        // Seatrch Popup
                         let centered_rect = centered_rect_percent_w_lines_h(
-                            SEARCH_POPUP_PERCENT_WIDTH, 
-                            SEARCH_POPUP_LINES_HEIGHT, 
-                            area
+                            SEARCH_POPUP_PERCENT_WIDTH,
+                            SEARCH_POPUP_LINES_HEIGHT,
+                            area,
                         );
 
-                        let offset = Offset{
+                        let offset = Offset {
                             x: (centered_rect.0 as i32 + self.search_form.cursor_offset().x).into(),
                             y: (centered_rect.1 + 1).into(),
                         };
 
                         let cursor_offset = area.offset(offset);
                         frame.set_cursor_position(cursor_offset);
-                    },
-                    _ => {},
+                    }
+                    _ => {}
                 }
 
                 frame.render_widget(&self, area);
@@ -285,17 +290,19 @@ impl App {
 
     /// Handle keyboard inputs.
     fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
-
         // Handling for popup
         if self.active_popup != Popup::None {
-
             match self.active_popup {
-                Popup::None => {},
+                Popup::None => {}
                 Popup::Search => {
                     match key_event {
-
-                        KeyEvent { code: KeyCode::Esc, .. }
-                        | KeyEvent { code: KeyCode::Enter, .. } => {
+                        KeyEvent {
+                            code: KeyCode::Esc, ..
+                        }
+                        | KeyEvent {
+                            code: KeyCode::Enter,
+                            ..
+                        } => {
                             self.active_popup = Popup::None;
                             if !self.nodes.is_empty() {
                                 self.selected = 0;
@@ -306,11 +313,16 @@ impl App {
                         // Other key presses go to the search field
                         _ => self.search_form.on_key_press(key_event),
                     }
-                },
+                }
                 Popup::Details => {
                     match key_event {
-                        KeyEvent { code: KeyCode::Esc, .. }
-                        | KeyEvent { code: KeyCode::Enter, .. } => {
+                        KeyEvent {
+                            code: KeyCode::Esc, ..
+                        }
+                        | KeyEvent {
+                            code: KeyCode::Enter,
+                            ..
+                        } => {
                             self.active_popup = Popup::None;
                         }
 
@@ -320,51 +332,50 @@ impl App {
                             ..
                         } => {
                             if !self.display_counters.is_empty() {
-
                                 let max_idx = self.display_counters.len().saturating_sub(1);
                                 self.popup_selected = (self.popup_selected + 1).min(max_idx);
-
 
                                 let vis = self.visible_rows.get().max(1);
                                 let max_offset = self.display_counters.len().saturating_sub(vis);
 
                                 if self.popup_selected >= self.popup_table_offset + vis {
-                                    self.popup_table_offset = (self.popup_table_offset + 1).min(max_offset);
+                                    self.popup_table_offset =
+                                        (self.popup_table_offset + 1).min(max_offset);
                                 }
-                                
                             }
                         }
 
-                    // Move selection up
-                    KeyEvent {
-                        code: KeyCode::Up,
-                        ..
-                    } => {
-                        if !self.display_counters.is_empty() {
-                            if self.popup_selected > 0 {
-                                self.popup_selected -= 1;
+                        // Move selection up
+                        KeyEvent {
+                            code: KeyCode::Up, ..
+                        } => {
+                            if !self.display_counters.is_empty() {
+                                if self.popup_selected > 0 {
+                                    self.popup_selected -= 1;
+                                }
+
+                                if self.popup_selected < self.popup_table_offset {
+                                    self.popup_table_offset =
+                                        self.popup_table_offset.saturating_sub(1);
+                                }
                             }
-
-                            if self.popup_selected < self.popup_table_offset {
-                                self.popup_table_offset = self.popup_table_offset.saturating_sub(1);
-                            }                            
                         }
-                    }
 
-                    // Update counters
-                    KeyEvent {
-                        code: KeyCode::Char('u'),
-                        ..
-                    } => {
-                        if self.nodes.is_empty() {
-                            self.status = "No nodes discovered yet, cannot update counters.".into();
-                        } else {
-                            self.update_counters();
+                        // Update counters
+                        KeyEvent {
+                            code: KeyCode::Char('u'),
+                            ..
+                        } => {
+                            if self.nodes.is_empty() {
+                                self.status =
+                                    "No nodes discovered yet, cannot update counters.".into();
+                            } else {
+                                self.update_counters();
+                            }
                         }
-                    }
                         _ => {}
                     }
-                },
+                }
             }
             return Ok(());
         }
@@ -373,15 +384,22 @@ impl App {
             // Quit keys: ESC, 'q', or Ctrl-C
             KeyEvent {
                 code: KeyCode::Esc,
-                modifiers: KeyModifiers::NONE, kind: _, state: _
+                modifiers: KeyModifiers::NONE,
+                kind: _,
+                state: _,
             }
             | KeyEvent {
                 code: KeyCode::Char('q'),
-                modifiers: KeyModifiers::NONE, kind: _, state: _
+                modifiers: KeyModifiers::NONE,
+                kind: _,
+                state: _,
             }
             | KeyEvent {
                 code: KeyCode::Char('c'),
-                modifiers: KeyModifiers::CONTROL, kind: _, state: _} => {
+                modifiers: KeyModifiers::CONTROL,
+                kind: _,
+                state: _,
+            } => {
                 self.events.send(AppEvent::Quit);
             }
 
@@ -479,8 +497,7 @@ impl App {
 
             // Move selection up
             KeyEvent {
-                code: KeyCode::Up,
-                ..
+                code: KeyCode::Up, ..
             } => {
                 if !self.nodes.is_empty() {
                     if self.selected > 0 {
@@ -492,7 +509,10 @@ impl App {
             }
 
             // Page down
-            KeyEvent { code: KeyCode::PageDown, .. } => {
+            KeyEvent {
+                code: KeyCode::PageDown,
+                ..
+            } => {
                 if !self.nodes.is_empty() {
                     let vis = self.visible_rows.get().max(1);
                     let len = self.filtered_len();
@@ -503,7 +523,10 @@ impl App {
             }
 
             // Page up
-            KeyEvent { code: KeyCode::PageUp, .. } => {
+            KeyEvent {
+                code: KeyCode::PageUp,
+                ..
+            } => {
                 if !self.nodes.is_empty() {
                     let vis = self.visible_rows.get().max(1);
                     self.selected = self.selected.saturating_sub(vis);
@@ -513,7 +536,10 @@ impl App {
             }
 
             // Home (go to first row)
-            KeyEvent { code: KeyCode::Home, .. } => {
+            KeyEvent {
+                code: KeyCode::Home,
+                ..
+            } => {
                 if !self.nodes.is_empty() {
                     self.selected = 0;
                     self.set_selected_node_guid();
@@ -522,7 +548,9 @@ impl App {
             }
 
             // End (go to last row)
-            KeyEvent { code: KeyCode::End, .. } => {
+            KeyEvent {
+                code: KeyCode::End, ..
+            } => {
                 if !self.nodes.is_empty() {
                     let len = self.filtered_len();
                     self.selected = len.saturating_sub(1);
@@ -543,7 +571,7 @@ impl App {
                     self.current_counters.clear();
                     self.previous_counters.clear();
                     self.popup_table_offset = 0;
-                    self.popup_selected = 0;       
+                    self.popup_selected = 0;
                     self.active_popup = Popup::Details;
                 } else {
                     self.active_popup = Popup::None;
@@ -566,7 +594,8 @@ impl App {
     // Discover Fabric
     fn discover_fabric(&mut self) {
         self.status = "Discovering...".into();
-        self.events.send(AppEvent::Discover(DiscoveryEvent::Request));
+        self.events
+            .send(AppEvent::Discover(DiscoveryEvent::Request));
     }
 
     // Update Counters
@@ -584,67 +613,59 @@ impl App {
         self.pending_counter_update = true;
 
         let lid_ports: Vec<LidPort> = match self.active_popup {
+            Popup::Details => match &self.selected_node {
+                Some(node) => {
+                    let node_option = self.nodes.iter().find(|n| n.guid == node.0);
 
-            Popup::Details => {
+                    match node_option {
+                        Some(node) => {
+                            self.status = node.node_description.clone();
 
-                match &self.selected_node {
-                    Some(node) => {
-                        
-                        let node_option = self.nodes.iter().find(|n| n.guid == node.0);
-
-                        match node_option {
-                            Some(node) => {
-                                self.status = node.node_description.clone();
-
-                                let lid = node.lid;
-                                node.ports.iter().map(|p|{
-                                    LidPort{
-                                        lid,
-                                        number: p.number
-                                    }
-                                }).collect()
-                            },
-                            None => {
-                                self.nodes.iter().map(|n| {
-                                            LidPort {
-                                                lid : n.lid,
-                                                number: AGG_COUNTERS_PORT,
-                                            }
-                                        }).collect()
-                            },
+                            let lid = node.lid;
+                            node.ports
+                                .iter()
+                                .map(|p| LidPort {
+                                    lid,
+                                    number: p.number,
+                                })
+                                .collect()
                         }
-                    },
-                    None => {
-                        self.nodes.iter().map(|n| {
-                                    LidPort {
-                                        lid : n.lid,
-                                        number: AGG_COUNTERS_PORT,
-                                    }
-                                }).collect()
+                        None => self
+                            .nodes
+                            .iter()
+                            .map(|n| LidPort {
+                                lid: n.lid,
+                                number: AGG_COUNTERS_PORT,
+                            })
+                            .collect(),
                     }
                 }
-
-            }
+                None => self
+                    .nodes
+                    .iter()
+                    .map(|n| LidPort {
+                        lid: n.lid,
+                        number: AGG_COUNTERS_PORT,
+                    })
+                    .collect(),
+            },
             // Everything else
-            _ => {
-                self.nodes.iter().map(|n| {
-                            LidPort {
-                                lid : n.lid,
-                                number: AGG_COUNTERS_PORT,
-                            }
-                        }).collect()
-            }
-
+            _ => self
+                .nodes
+                .iter()
+                .map(|n| LidPort {
+                    lid: n.lid,
+                    number: AGG_COUNTERS_PORT,
+                })
+                .collect(),
         };
 
-        self.events.send(AppEvent::Counters(CounterEvent::Request(
-            lid_ports
-        )));
+        self.events
+            .send(AppEvent::Counters(CounterEvent::Request(lid_ports)));
     }
 
     /// Populate the counters
     fn handle_counters_update(&mut self, counters: HashMap<(u16, i32), HashMap<String, u64>>) {
-
         self.previous_counters = std::mem::take(&mut self.current_counters);
         self.current_counters = counters;
 
@@ -653,7 +674,6 @@ impl App {
                 // Just replace the entire map
                 self.display_counters = self.current_counters.clone();
                 self.status = format!("Updated counters ({})", self.display_counters.len());
-
             }
             CounterMode::Delta => {
                 self.display_counters.clear();
@@ -661,22 +681,21 @@ impl App {
                 for (lid, new_map) in &self.current_counters {
                     if let Some(old_map) = self.previous_counters.get_mut(&lid) {
                         let delta = calc_counters_delta(old_map, &new_map);
-                        self.display_counters.insert(*lid,  delta);
+                        self.display_counters.insert(*lid, delta);
                     } else {
                         // If we had no previous entry for that LID, just insert the new one
                         self.display_counters.insert(*lid, new_map.clone());
                     }
                 }
 
-                self.status = format!("Updated counters ({})",  self.current_counters.len());
-
+                self.status = format!("Updated counters ({})", self.current_counters.len());
             }
             CounterMode::Baseline => {
                 self.display_counters.clear();
-                for (lid, new_map) in & self.current_counters {
+                for (lid, new_map) in &self.current_counters {
                     if let Some(old_map) = self.baseline_counters.get_mut(&lid) {
                         let delta = calc_counters_delta(&old_map, &new_map);
-                        self.display_counters.insert(*lid,  delta);
+                        self.display_counters.insert(*lid, delta);
                     } else {
                         // If we had no previous entry for that LID, just insert the new one
                         self.display_counters.insert(*lid, new_map.clone());
@@ -696,15 +715,16 @@ impl App {
             self.auto_update_counter += 1;
         }
 
-        if self.auto_update &&
-           self.pending_counter_update == false &&
-           self.auto_update_counter >= self.auto_update_interval {
+        if self.auto_update
+            && self.pending_counter_update == false
+            && self.auto_update_counter >= self.auto_update_interval
+        {
             if !self.nodes.is_empty() {
                 self.status = "Updating counters...".into();
                 self.update_counters();
             }
             // Reset
-           self.auto_update_counter = 0;
+            self.auto_update_counter = 0;
         }
     }
 
@@ -725,8 +745,7 @@ impl App {
             .case_insensitive(true)
             .build()
             .unwrap_or_else(|_| regex::Regex::new("").unwrap());
-        self
-            .nodes
+        self.nodes
             .iter()
             .filter(|n| re.is_match(&n.node_description))
             .count()
@@ -763,17 +782,16 @@ impl App {
             .map(|n| {
                 let counters = self.display_counters.get(&(n.lid, AGG_COUNTERS_PORT));
 
-                let recv_bw = counters
-                    .map_or(0.0, |ctrs| get_bw(ctrs, "rcv_bytes", &self.counter_mode));
-                let xmt_bw = counters
-                    .map_or(0.0, |ctrs| get_bw(ctrs, "xmt_bytes", &self.counter_mode));
-                let xmit_waits = counters
-                    .map_or(0.0, |ctrs| get_bw_loss(ctrs, "xmit_waits", &self.counter_mode));
-                let error_count = counters
-                    .map_or(0, |ctrs| count_errors(ctrs));
-                let error_strings = counters
-                    .map_or("".to_string(), |ctrs| get_error_strings(ctrs));
-                
+                let recv_bw =
+                    counters.map_or(0.0, |ctrs| get_bw(ctrs, "rcv_bytes", &self.counter_mode));
+                let xmt_bw =
+                    counters.map_or(0.0, |ctrs| get_bw(ctrs, "xmt_bytes", &self.counter_mode));
+                let xmit_waits = counters.map_or(0.0, |ctrs| {
+                    get_bw_loss(ctrs, "xmit_waits", &self.counter_mode)
+                });
+                let error_count = counters.map_or(0, |ctrs| count_errors(ctrs));
+                let error_strings = counters.map_or("".to_string(), |ctrs| get_error_strings(ctrs));
+
                 (
                     n.guid,
                     n.lid,
@@ -783,7 +801,7 @@ impl App {
                     xmt_bw,
                     xmit_waits,
                     error_count,
-                    error_strings
+                    error_strings,
                 )
             })
             .collect();
@@ -791,14 +809,14 @@ impl App {
         // Sort based on `self.sort_column`
         node_info.sort_by(|a, b| {
             let ordering = match self.sort_column {
-                1 => a.1.cmp(&b.1),           // LID
-                2 => a.2.cmp(&b.2),           // Description
-                3 => a.3.cmp(&b.3),           // Port count
+                1 => a.1.cmp(&b.1),                                    // LID
+                2 => a.2.cmp(&b.2),                                    // Description
+                3 => a.3.cmp(&b.3),                                    // Port count
                 4 => a.4.partial_cmp(&b.4).unwrap_or(Ordering::Equal), // Receive BW
                 5 => a.5.partial_cmp(&b.5).unwrap_or(Ordering::Equal), // Transmit BW
                 6 => a.6.partial_cmp(&b.6).unwrap_or(Ordering::Equal), // Xmit waits
-                7 => a.7.cmp(&b.7),           // Error count
-                8 => a.8.cmp(&b.8),           // Error strings
+                7 => a.7.cmp(&b.7),                                    // Error count
+                8 => a.8.cmp(&b.8),                                    // Error strings
                 _ => Ordering::Equal,
             };
 
@@ -821,11 +839,10 @@ impl App {
             self.selected_node = None;
         }
     }
-
 }
 
 /// Calculate the delta between two counter maps.
-/// 
+///
 /// This function computes the difference between new and old counter values.
 /// If the new value is less than the old value (indicating a counter reset),
 /// it returns the new value as-is.
@@ -839,9 +856,7 @@ fn calc_counters_delta(
         let old_val = old_map.get(key).copied().unwrap_or(0);
 
         let delta = match new_val.cmp(&old_val) {
-            Ordering::Equal | Ordering::Greater => {
-                new_val.saturating_sub(old_val)
-            }
+            Ordering::Equal | Ordering::Greater => new_val.saturating_sub(old_val),
             _ => {
                 // Counter likely reset, use new value as-is
                 new_val

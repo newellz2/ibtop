@@ -4,17 +4,16 @@ use crate::app::App;
 
 pub mod app;
 pub mod event;
-pub mod ui;
-pub mod services;
 pub mod scope;
-
+pub mod services;
+pub mod ui;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Args {
     #[arg(long)]
     pub hca: String,
-    
+
     #[arg(long, default_value_t = 0)]
     pub pkey: u32,
 
@@ -43,10 +42,9 @@ pub struct Args {
     pub verbose: bool,
 }
 
-
 fn main() -> color_eyre::Result<()> {
     let args = Args::parse();
-    let _stderr_gag: Option<gag::Gag> = gag::Gag::stderr().ok();
+    //let _stderr_gag: Option<gag::Gag> = gag::Gag::stderr().ok();
     color_eyre::install()?;
     let terminal = ratatui::init();
     let result = App::new(args).run(terminal);

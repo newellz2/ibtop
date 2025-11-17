@@ -1,0 +1,54 @@
+ARG DEBIAN_VERSION="11"
+FROM debian:${DEBIAN_VERSION}
+
+ARG DEBIAN_VERSION
+ARG DOCA_PACKAGES=""
+ARG DOCA_VERSION=3.1.0
+
+ARG DOCA_PREPUBLISH=false
+ARG DOCA_DISTRO="debian${DEBIAN_VERSION}"
+ARG DOCA_ARCH="x86_64"
+
+# Avoid prompts from apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install basic dependencies and fix GPG/CA issues
+RUN apt-get update && \
+    apt-get install -y \
+    curl \
+    gnupg \
+    build-essential \
+    pkg-config \
+    git \
+    clang \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install DOCA packages and other dev libs
+# Combined the last apt-get update and install
+RUN apt-get update && \
+    apt-get install -y ${DOCA_PACKAGES} \
+    libibumad-dev \
+    libibnetdisc-dev \
+    libibmad-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Set working directory
+WORKDIR /build
+
+# Copy both rsmad and ibtop
+COPY ibmad/ /build/ibmad/
+COPY ibtop/ /build/ibtop/
+
+# Build the project
+WORKDIR /build/ibtop
+RUN cargo build --release
+
+RUN ls -la /build/ibtop/target/release/; \
+    cp /build/ibtop/target/release/ibtop /usr/local/bin/ibtop
+
+CMD ["/build/ibtop/target/release/ibtop"]
+
