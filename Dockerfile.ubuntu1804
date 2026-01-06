@@ -1,0 +1,63 @@
+ARG UBUNTU_VERSION="18.04"
+FROM ubuntu:${UBUNTU_VERSION}
+
+ARG UBUNTU_VERSION
+ARG OFED_PACKAGES=""
+ARG OFED_VERSION=23.10-4.0.9.1
+
+# Avoid prompts from apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install basic dependencies and fix GPG/CA issues
+RUN apt-get update && \
+    apt-get install -y \
+    wget \
+    curl \
+    gnupg \
+    ubuntu-keyring \
+    build-essential \
+    pkg-config \
+    git \
+    clang \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN echo "Installing MLNX OFED ${OFED_VERSION}..." && \
+    # Determine base URL
+    BASE_URL="https://linux.mellanox.com/public/repo/mlnx_ofed" && \
+    OFED_URL="${BASE_URL}/${OFED_VERSION}/ubuntu${UBUNTU_VERSION}/x86_64" && \
+    echo "Using OFED URL: ${OFED_URL}" && \
+    # Download key
+    wget -qO - https://www.mellanox.com/downloads/ofed/RPM-GPG-KEY-Mellanox | apt-key add - && \
+    echo "deb ${OFED_URL} ./" > /etc/apt/sources.list.d/mlnx_ofed.list && \
+    cat /etc/apt/sources.list.d/mlnx_ofed.list && \
+    apt-get update && \
+    apt-get upgrade -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install OFED packages and other dev libs
+RUN apt-get update && \
+    apt-get install -y ${OFED_PACKAGES} \
+    libibumad-dev \
+    libibnetdisc-dev \
+    libibmad-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Set working directory
+WORKDIR /build
+
+# Copy both rsmad and ibtop
+COPY rsmad/ /build/rsmad/
+COPY ibtop/ /build/ibtop/
+
+# Build the project
+WORKDIR /build/ibtop
+RUN cargo build --release
+
+RUN ls -la /build/ibtop/target/release/; \
+    cp /build/ibtop/target/release/ibtop /usr/local/bin/ibtop
+
+CMD ["/build/ibtop/target/release/ibtop"]
