@@ -2,14 +2,13 @@
 
 A CLI application for watching fabric throughput, congestion, and errors.
 
-Use the Up and Down arrow keys to scroll through the node table when the list exceeds the available screen space.
+Use the Up and Down arrow keys to scroll through the node table when the list exceeds the available screen space. `Enter` will give you a details for a switch.
 
 ![image](https://github.com/user-attachments/assets/26ff51a4-d8c0-4b49-828d-b686f80fda39)
 
 Can be built with the following commands:
 ```bash
 git clone git@github.com:newellz2/ibmad.git
-
 git clone git@github.com:newellz2/ibtop.git
 
 cd ibtop
