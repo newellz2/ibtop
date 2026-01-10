@@ -8,7 +8,7 @@ Use the Up and Down arrow keys to scroll through the node table when the list ex
 
 Can be built with the following commands:
 ```bash
-git clone git@github.com:newellz2/rsmad.git
+git clone git@github.com:newellz2/ibmad.git
 
 git clone git@github.com:newellz2/ibtop.git
 

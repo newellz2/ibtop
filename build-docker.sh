@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Build script for ibtop Docker image
-# This script handles the rsmad dependency correctly
+# This script handles the ibmad dependency correctly
 #
 # Usage:
 #   ./build-docker.sh [DOCA_VERSION] [DOCA_PACKAGES]
@@ -22,8 +22,8 @@ UBUNTU_VERSION=${4:-"24.04"} #Other options: 20.04, 22.04
 echo "Building ibtop Docker image with DOCA ${DOCA_VERSION}..."
 echo "DOCA packages: ${DOCA_PACKAGES}"
 
-if [ -d "../rsmad" ]; then
-    echo "Found rsmad in parent directory, building from parent context..."
+if [ -d "../ibmad" ]; then
+    echo "Found ibmad in parent directory, building from parent context..."
     cd ..
     docker build --debug \
         --build-arg DOCA_VERSION=${DOCA_VERSION} \
@@ -37,8 +37,8 @@ if [ -d "../rsmad" ]; then
     docker cp ibtop-temp:/build/ibtop/target/release/ibtop ./ibtop
     docker container rm ibtop-temp
 else
-    echo "rsmad not found in parent directoy"
-    echo "please clone it: git clone git@github.com/newellz2/rsmad"
+    echo "ibmad not found in parent directory"
+    echo "please clone it: git clone git@github.com/newellz2/ibmad"
     exit 1
 fi
 

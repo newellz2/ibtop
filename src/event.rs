@@ -6,10 +6,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{app::AppConfig, services::{
-    lib::{CounterEvent, DiscoveryEvent, TestCountersService, TestDiscoverService},
-    rsmad::{RsmadCountersService, RsmadDiscoveryService},
-}};
+use crate::{
+    app::AppConfig,
+    services::{
+        ibmad::{IbmadCountersService, IbmadDiscoveryService},
+        lib::{CounterEvent, DiscoveryEvent, TestCountersService, TestDiscoverService},
+    },
+};
 
 /// The frequency (in Hz) at which tick events are emitted.
 const TICK_FPS: f64 = 30.0;
@@ -65,7 +68,6 @@ impl EventHandler {
     //
     // These threads communicate with the main event loop via channels.
     pub fn new(config: AppConfig) -> Self {
-
         // 1) Spawn the general event thread (tick + crossterm).
         let (sender, receiver) = mpsc::channel();
         let sender_clone = sender.clone();
@@ -91,9 +93,10 @@ impl EventHandler {
                     }
                     // Default
                     _ => {
-                        let disc_actor = RsmadDiscoveryService::new(ev_disc_rx, disc_ev_tx, config_clone);
+                        let disc_actor =
+                            IbmadDiscoveryService::new(ev_disc_rx, disc_ev_tx, config_clone);
                         if let Err(e) = disc_actor.run() {
-                            eprintln!("Error in RsmadDiscoveryService: {e}");
+                            eprintln!("Error in IbmadDiscoveryService: {e}");
                         }
                     }
                 }
@@ -115,9 +118,10 @@ impl EventHandler {
                     }
                     // Default
                     _ => {
-                        let ctr_actor = RsmadCountersService::new(ev_ctx_rx, ctr_ev_tx, config_clone);
+                        let ctr_actor =
+                            IbmadCountersService::new(ev_ctx_rx, ctr_ev_tx, config_clone);
                         if let Err(e) = ctr_actor.run() {
-                            eprintln!("Error in RsmadCountersService: {e}");
+                            eprintln!("Error in IbmadCountersService: {e}");
                         }
                     }
                 }
@@ -142,17 +146,24 @@ impl EventHandler {
     //  - Counter event receiver
     pub fn next(&self) -> color_eyre::Result<Event> {
         loop {
-            // 1) General events
-            if let Ok(e) = self.receiver.recv_timeout(self.wait_duration) {
-                return Ok(e);
-            }
-            // 2) Discovery events
-            if let Ok(e) = self.disc_rx.recv_timeout(self.wait_duration) {
+            // Prefer service events if they're already queued, without blocking.
+            if let Ok(e) = self.disc_rx.try_recv() {
                 return Ok(Event::Discover(e));
             }
-            // 3) Counter events
-            if let Ok(e) = self.ctr_rx.recv_timeout(self.wait_duration) {
+            if let Ok(e) = self.ctr_rx.try_recv() {
                 return Ok(Event::Counters(e));
+            }
+
+            // Block briefly on the main event channel to avoid busy-spinning.
+            match self.receiver.recv_timeout(self.wait_duration) {
+                Ok(e) => return Ok(e),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // Nothing ready; loop again.
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // If the main channel is disconnected, avoid a tight spin.
+                    thread::sleep(self.wait_duration);
+                }
             }
         }
     }

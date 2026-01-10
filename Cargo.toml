@@ -5,15 +5,19 @@ description = "a top-like application for IB switches"
 edition = "2024"
 
 [dependencies]
+rayon = "1.10"
 crossterm = "0.28.1"
 ratatui = "0.29.0"
 color-eyre = "0.6.3"
 config = "0.15.11"
 chrono = "0.4.40"
-rsmad = { path = "../rsmad" }
+ibmad = { path = "../ibmad" }
 clap = { version = "4.5.32", features = ["derive"] }
 serde = { version = "1.0.219", features = ["derive"] }
-rayon = "1.10.0"
 gag = "1.0.0"
 regex = "1.11.1"
 rand = "0.8"
+tracing = "0.1.44"
+tracing-error = "0.2.1"
+lazy_static = "1.5.0"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
