@@ -4,34 +4,39 @@ use crate::app::App;
 
 pub mod app;
 pub mod event;
-pub mod ui;
-pub mod services;
 pub mod scope;
-
+pub mod services;
+pub mod ui;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Args {
     #[arg(long)]
     pub hca: String,
-    
+
     #[arg(long, default_value_t = 0)]
     pub pkey: u32,
 
     #[arg(long, default_value_t = 16)]
     pub threads: usize,
 
-    #[arg(long, default_value = "rsmad")]
+    #[arg(long, default_value = "ibmad")]
     pub service_type: String,
 
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = 2000)]
     pub update_interval: usize,
 
-    #[arg(long, default_value_t = 1000)]
-    pub timeout: u32,
+    #[arg(long, default_value_t = 100)]
+    pub update_timeout: u32,
+
+    #[arg(long, default_value_t = 1)]
+    pub update_retries: u32,
+
+    #[arg(long, default_value_t = 200)]
+    pub discovery_timeout: u32,
 
     #[arg(long, default_value_t = 3)]
-    pub retries: u32,
+    pub discovery_retries: u32,
 
     #[arg(long, default_value_t = false)]
     pub include_hcas: bool,
@@ -42,7 +47,6 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub verbose: bool,
 }
-
 
 fn main() -> color_eyre::Result<()> {
     let args = Args::parse();

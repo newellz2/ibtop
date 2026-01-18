@@ -6,10 +6,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{app::AppConfig, services::{
-    lib::{CounterEvent, DiscoveryEvent, TestCountersService, TestDiscoverService},
-    rsmad::{RsmadCountersService, RsmadDiscoveryService},
-}};
+use crate::{
+    app::AppConfig,
+    services::{
+        ibmad::{IbmadCountersService, IbmadDiscoveryService},
+        lib::{CounterEvent, DiscoveryEvent, TestCountersService, TestDiscoverService},
+    },
+};
 
 /// The frequency (in Hz) at which tick events are emitted.
 const TICK_FPS: f64 = 30.0;
@@ -65,7 +68,6 @@ impl EventHandler {
     //
     // These threads communicate with the main event loop via channels.
     pub fn new(config: AppConfig) -> Self {
-
         // 1) Spawn the general event thread (tick + crossterm).
         let (sender, receiver) = mpsc::channel();
         let sender_clone = sender.clone();
@@ -91,9 +93,10 @@ impl EventHandler {
                     }
                     // Default
                     _ => {
-                        let disc_actor = RsmadDiscoveryService::new(ev_disc_rx, disc_ev_tx, config_clone);
+                        let disc_actor =
+                            IbmadDiscoveryService::new(ev_disc_rx, disc_ev_tx, config_clone);
                         if let Err(e) = disc_actor.run() {
-                            eprintln!("Error in RsmadDiscoveryService: {e}");
+                            eprintln!("Error in IbmadDiscoveryService: {e}");
                         }
                     }
                 }
@@ -115,9 +118,10 @@ impl EventHandler {
                     }
                     // Default
                     _ => {
-                        let ctr_actor = RsmadCountersService::new(ev_ctx_rx, ctr_ev_tx, config_clone);
+                        let ctr_actor =
+                            IbmadCountersService::new(ev_ctx_rx, ctr_ev_tx, config_clone);
                         if let Err(e) = ctr_actor.run() {
-                            eprintln!("Error in RsmadCountersService: {e}");
+                            eprintln!("Error in IbmadCountersService: {e}");
                         }
                     }
                 }

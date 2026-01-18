@@ -196,11 +196,11 @@ impl App {
                 let counters = self.display_counters.get(&(n.lid, AGG_COUNTERS_PORT));
 
                 let recv_bw = counters
-                    .map_or(0.0, |ctrs| get_bw(ctrs, "rcv_bytes", &self.counter_mode));
+                    .map_or(0.0, |ctrs| get_bw(ctrs, "port_rcv_data", &self.counter_mode));
                 let xmt_bw = counters
-                    .map_or(0.0, |ctrs| get_bw(ctrs, "xmt_bytes", &self.counter_mode));
+                    .map_or(0.0, |ctrs| get_bw(ctrs, "port_xmit_data", &self.counter_mode));
                 let xmit_waits = counters
-                    .map_or(0.0, |ctrs| get_bw_loss(ctrs, "xmit_waits", &self.counter_mode));
+                    .map_or(0.0, |ctrs| get_bw_loss(ctrs, "port_xmit_wait", &self.counter_mode));
                 let error_count = counters
                     .map_or(0, |ctrs| count_errors(ctrs));
                 let error_strings = counters
@@ -274,6 +274,11 @@ impl App {
             .skip(offset)
             .take(visible_rows)
             .map(|(idx, (_guid, lid, desc, ports, r_bw, x_bw, waits, errs, err_str))| {
+                let has_error = self
+                    .display_counters
+                    .iter()
+                    .any(|(&(entry_lid, _), ctrs)| entry_lid == *lid && ctrs.get("error").map_or(false, |v| *v > 0));
+
                 let mut row = Row::new(vec![
                     Cell::from(format!("{}", lid)),
                     Cell::from(truncate_fit(desc, widths[1])),
@@ -284,14 +289,18 @@ impl App {
                     Cell::from(format!("{}", errs)),
                     Cell::from(truncate_fit(err_str, widths[7])),
                 ]);
-                // Zebra striping for readability (non-selected rows)
+
+                let mut style = Style::default();
+                if has_error {
+                    style = style.fg(Color::Red);
+                }
                 if selected_idx != idx && idx % 2 == 1 {
-                    row = row.style(Style::default().bg(Color::Rgb(32, 32, 32)));
+                    style = style.bg(Color::Rgb(32, 32, 32));
                 }
-                // Highlight the selected row
                 if selected_idx == idx {
-                    row = row.style(Style::default().bg(Color::LightBlue));
+                    style = style.bg(Color::LightBlue);
                 }
+                row = row.style(style);
                 row
             })
             .collect::<Vec<_>>();
@@ -453,7 +462,7 @@ impl App {
         let widths = compute_column_widths(inner_area.width, &DETAILS_TABLE_COLUMN_RATIOS);
 
         // Prepare node info
-        let mut node_info: Vec<(i32, String, f64, f64, f64, u128, String)> = self
+        let mut node_info: Vec<(u16, i32, String, f64, f64, f64, u128, String, bool)> = self
             .display_counters
             .iter()
             .map(|(&(lid, port), ctrs)| {
@@ -464,12 +473,14 @@ impl App {
                     .and_then(|n| n.ports.iter().find(|p| p.number == port))
                     .map(|p| p.remote_node_description.clone())
                     .unwrap_or("".to_string());
-                let recv_bw = get_bw(ctrs, "rcv_bytes", &self.counter_mode);
-                let xmt_bw = get_bw(ctrs, "xmt_bytes", &self.counter_mode);
-                let xmit_waits = get_bw_loss(ctrs, "xmit_waits", &self.counter_mode);
+                let recv_bw = get_bw(ctrs, "port_rcv_data", &self.counter_mode);
+                let xmt_bw = get_bw(ctrs, "port_xmit_data", &self.counter_mode);
+                let xmit_waits = get_bw_loss(ctrs, "port_xmit_wait", &self.counter_mode);
                 let error_count = count_errors(ctrs);
                 let error_strings = get_error_strings(ctrs);
+                let has_error = ctrs.get("error").map_or(false, |v| *v > 0);
                 (
+                    lid,
                     port,
                     node_desc,
                     recv_bw,
@@ -477,11 +488,12 @@ impl App {
                     xmit_waits,
                     error_count,
                     error_strings,
+                    has_error,
                 )
             })
             .collect();
 
-        node_info.sort_by(|a, b| a.0.cmp(&b.0));
+        node_info.sort_by(|a, b| a.1.cmp(&b.1));
 
         let visible_rows = inner_area.height.saturating_sub(1) as usize;
         self.visible_rows.set(visible_rows);
@@ -492,7 +504,7 @@ impl App {
             .enumerate()
             .skip(offset)
             .take(visible_rows)
-            .map(|(idx, (port, node_desc, r_bw, x_bw, waits, errs, err_str))| {
+            .map(|(idx, (_lid, port, node_desc, r_bw, x_bw, waits, errs, err_str, has_error))| {
                 let mut row = Row::new(vec![
                     Cell::from(format!("{}", port)),
                     Cell::from(truncate_fit(node_desc, widths[2])),
@@ -502,14 +514,18 @@ impl App {
                     Cell::from(format!("{}", errs)),
                     Cell::from(truncate_fit(err_str, widths[7])),
                 ]);
-                // Zebra striping for readability (non-selected)
+
+                let mut style = Style::default();
+                if *has_error {
+                    style = style.fg(Color::Red);
+                }
                 if self.popup_selected != idx && idx % 2 == 1 {
-                    row = row.style(Style::default().bg(Color::Rgb(32, 32, 32)));
+                    style = style.bg(Color::Rgb(32, 32, 32));
                 }
-                // Highlight the selected row in the popup
                 if self.popup_selected == idx {
-                    row = row.style(Style::default().bg(Color::LightBlue));
+                    style = style.bg(Color::LightBlue);
                 }
+                row = row.style(style);
                 row
             })
             .collect::<Vec<_>>();

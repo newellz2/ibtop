@@ -10,7 +10,7 @@ ratatui = "0.29.0"
 color-eyre = "0.6.3"
 config = "0.15.11"
 chrono = "0.4.40"
-rsmad = { path = "../rsmad" }
+ibmad = { path = "../ibmad" }
 clap = { version = "4.5.32", features = ["derive"] }
 serde = { version = "1.0.219", features = ["derive"] }
 rayon = "1.10.0"

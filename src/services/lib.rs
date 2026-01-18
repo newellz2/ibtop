@@ -1,25 +1,36 @@
 use std::{
-    collections::HashMap, 
-    sync::mpsc::{Receiver, Sender}, 
-    time::{Instant}
+    collections::HashMap,
+    sync::mpsc::{Receiver, Sender},
+    time::Instant,
 };
 
-use chrono::Utc;
-use rand::{rngs::StdRng, Rng, SeedableRng};
 use crate::app::AppConfig;
-use super::rsmad::ERROR_COUNTERS;
+use chrono::Utc;
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
-pub enum ServiceType{
+pub const ERROR_COUNTERS: [&str; 9] = [
+    "symbol_errors",
+    "link_recovers",
+    "link_downed",
+    "rcv_errors",
+    "phys_rcv_errors",
+    "switch_rel_errors",
+    "excess_overrun_errors",
+    "vl15dropped",
+    "qp1_drops",
+];
+
+pub enum ServiceType {
     RsMAD,
-    Test
+    Test,
 }
 
 #[derive(Clone, Debug)]
-pub enum DiscoveryEvent{
+pub enum DiscoveryEvent {
     Request,
     Response(Vec<Node>),
     Error,
-    Exit
+    Exit,
 }
 
 #[derive(Clone, Debug)]
@@ -27,7 +38,7 @@ pub enum CounterEvent {
     Request(Vec<LidPort>),
     Response(HashMap<(u16, i32), HashMap<String, u64>>),
     Error,
-    Exit
+    Exit,
 }
 
 #[derive(Clone, Debug)]
@@ -70,41 +81,34 @@ pub struct TestDiscoverService {
 impl TestDiscoverService {
     pub fn new(
         ev_disc_rx: Receiver<DiscoveryEvent>,
-        disc_ev_tx: Sender<DiscoveryEvent>, 
-        _config: AppConfig
+        disc_ev_tx: Sender<DiscoveryEvent>,
+        _config: AppConfig,
     ) -> Self {
-
-        Self{
+        Self {
             ev_disc_rx,
             disc_ev_tx,
             ports_per_node: 64,
         }
     }
-    pub fn run(self)  -> color_eyre::Result<()> {
-
+    pub fn run(self) -> color_eyre::Result<()> {
         loop {
             match self.ev_disc_rx.recv() {
-                Ok(ev) => {
-
-                    match ev {
-                        DiscoveryEvent::Exit => {
-                            return Ok(())
-                        }
-                        DiscoveryEvent::Request => {
-                            let _ = self.disc_ev_tx.send(
-                                DiscoveryEvent::Response(self.get_nodes())
-                            );
-                        },
-                        _ => {},
+                Ok(ev) => match ev {
+                    DiscoveryEvent::Exit => return Ok(()),
+                    DiscoveryEvent::Request => {
+                        let _ = self
+                            .disc_ev_tx
+                            .send(DiscoveryEvent::Response(self.get_nodes()));
                     }
-                }
+                    _ => {}
+                },
                 Err(_e) => {}
             }
         }
     }
 }
 
-impl DiscoverService for TestDiscoverService{
+impl DiscoverService for TestDiscoverService {
     fn get_nodes(&self) -> Vec<Node> {
         let mut nodes = Vec::new();
 
@@ -117,7 +121,7 @@ impl DiscoverService for TestDiscoverService{
                     remote_node_description: "".to_string(),
                 });
             }
-            
+
             nodes.push(Node {
                 guid: i as u64,
                 node_description: format!("switch-{i}"),
@@ -140,46 +144,35 @@ pub struct TestCountersService {
 impl TestCountersService {
     pub fn new(
         ev_ctr_rx: Receiver<CounterEvent>,
-        ctr_ev_tx: Sender<CounterEvent>, 
-        _config: AppConfig
+        ctr_ev_tx: Sender<CounterEvent>,
+        _config: AppConfig,
     ) -> Self {
-
         Self {
             ev_ctr_rx,
             ctr_ev_tx,
             start: Instant::now(),
         }
     }
-    pub fn run(self)  -> color_eyre::Result<()> {
-
+    pub fn run(self) -> color_eyre::Result<()> {
         loop {
             match self.ev_ctr_rx.recv() {
-                Ok(ev) => {
-                    match ev {
-                        CounterEvent::Exit => {
-                            return Ok(())
-                        }
-                        CounterEvent::Request(lid_ports) => {
-
-                            let _ = self.ctr_ev_tx.send(
-                                CounterEvent::Response(
-                                    self.get_counters(lid_ports)
-                                )
-                            );
-                        },
-                        _ => {},
+                Ok(ev) => match ev {
+                    CounterEvent::Exit => return Ok(()),
+                    CounterEvent::Request(lid_ports) => {
+                        let _ = self
+                            .ctr_ev_tx
+                            .send(CounterEvent::Response(self.get_counters(lid_ports)));
                     }
-                }
-                Err(_e) => {},
+                    _ => {}
+                },
+                Err(_e) => {}
             }
         }
     }
 }
 
-impl CountersService for TestCountersService{
-
-    fn get_counters(&self, lid_ports: Vec<LidPort>) -> HashMap<(u16, i32), HashMap<String, u64>>{
-
+impl CountersService for TestCountersService {
+    fn get_counters(&self, lid_ports: Vec<LidPort>) -> HashMap<(u16, i32), HashMap<String, u64>> {
         let mut rng = StdRng::from_entropy();
         let mut counters: HashMap<(u16, i32), HashMap<String, u64>> = HashMap::new();
 
@@ -192,21 +185,24 @@ impl CountersService for TestCountersService{
         for lp in &lid_ports {
             let mut node_counters: HashMap<String, u64> = HashMap::new();
             // Simple algorithm to generate steadily increasing counters
-            let base = elapsed.saturating_mul(1000).saturating_add((lp.lid as i32 + lp.number) as u64 * 10);
+            let base = elapsed
+                .saturating_mul(1000)
+                .saturating_add((lp.lid as i32 + lp.number) as u64 * 10);
 
-            let xmt_bytes = base.saturating_mul(100_000).saturating_mul((lp.lid as i32 + lp.number) as u64);
+            let xmt_bytes = base
+                .saturating_mul(100_000)
+                .saturating_mul((lp.lid as i32 + lp.number) as u64);
             node_counters.insert("xmt_bytes".to_string(), xmt_bytes);
 
-            let rcv_bytes = base.saturating_mul(100_000).saturating_mul((lp.lid as i32 + lp.number) as u64);
+            let rcv_bytes = base
+                .saturating_mul(100_000)
+                .saturating_mul((lp.lid as i32 + lp.number) as u64);
             node_counters.insert("rcv_bytes".to_string(), rcv_bytes);
 
             let xmit_waits = rng.gen_range(0..1_000_000_000) + (elapsed / 10);
             node_counters.insert("xmit_waits".to_string(), xmit_waits);
 
-            node_counters.insert(
-                "start_timestamp".to_string(),
-                now_nanos,
-            );
+            node_counters.insert("start_timestamp".to_string(), now_nanos);
             node_counters.insert(
                 "end_timestamp".to_string(),
                 now_nanos + simulated_work_duration_nanos,
@@ -218,12 +214,12 @@ impl CountersService for TestCountersService{
                 .map(|&err_ctr| {
                     let err_cnt = (rng.gen_range(0..=1) * lp.lid) as u64;
                     node_counters.insert(err_ctr.to_string(), err_cnt);
-                }).collect();
+                })
+                .collect();
 
             counters.insert((lp.lid, lp.number), node_counters);
         }
 
         counters
     }
-
 }
