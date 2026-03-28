@@ -20,7 +20,7 @@ use crate::app::{
 const MAIN_TABLE_COLUMN_RATIOS: [f64; 8] = [0.04, 0.32, 0.04, 0.12, 0.12, 0.12, 0.12, 0.12];
 
 // Column ratios for the details popup table layout
-const DETAILS_TABLE_COLUMN_RATIOS: [f64; 8] = [0.0, 0.04, 0.32, 0.12, 0.12, 0.12, 0.12, 0.16];
+const DETAILS_TABLE_COLUMN_RATIOS: [f64; 9] = [0.0, 0.04, 0.06, 0.28, 0.12, 0.12, 0.12, 0.10, 0.16];
 
 impl Widget for &App {
     // Renders the user interface widgets.
@@ -420,7 +420,7 @@ impl App {
         let widths = compute_column_widths(inner_area.width, &DETAILS_TABLE_COLUMN_RATIOS);
 
         // Prepare node info (only for the selected node's ports).
-        let mut node_info: Vec<(i32, String, f64, f64, f64, u128, String)> = Vec::new();
+        let mut node_info: Vec<(i32, String, String, f64, f64, f64, u128, String)> = Vec::new();
         if let Some(selected) = &self.selected_node {
             if let Some(n) = self.nodes.iter().find(|n| n.guid == selected.0) {
                 let lid = n.lid;
@@ -435,6 +435,7 @@ impl App {
                     let error_strings = ctrs.map_or(String::new(), |c| get_error_strings(c));
                     node_info.push((
                         port,
+                        p.link_state.clone(),
                         p.remote_node_description.clone(),
                         recv_bw,
                         xmt_bw,
@@ -460,15 +461,16 @@ impl App {
             .skip(offset)
             .take(visible_rows)
             .map(
-                |(idx, (port, node_desc, r_bw, x_bw, waits, errs, err_str))| {
+                |(idx, (port, state, node_desc, r_bw, x_bw, waits, errs, err_str))| {
                     let mut row = Row::new(vec![
                         Cell::from(format!("{}", port)),
-                        Cell::from(truncate_fit(node_desc, widths[2])),
+                        Cell::from(state.as_str()),
+                        Cell::from(truncate_fit(node_desc, widths[3])),
                         Cell::from(format!("{:.2}", r_bw)),
                         Cell::from(format!("{:.2}", x_bw)),
                         Cell::from(format!("{:.2}", waits)),
                         Cell::from(format!("{}", errs)),
-                        Cell::from(truncate_fit(err_str, widths[7])),
+                        Cell::from(truncate_fit(err_str, widths[8])),
                     ]);
                     // Zebra striping for readability (non-selected)
                     if self.popup_selected != idx && idx % 2 == 1 {
@@ -492,17 +494,19 @@ impl App {
                 Cell::from(""),
                 Cell::from(""),
                 Cell::from(""),
+                Cell::from(""),
             ]));
         }
 
         let header_cells = vec![
-            Cell::from(format!("PT")),
-            Cell::from(format!("NODE")),
-            Cell::from(format!("RECV_BW")),
-            Cell::from(format!("SEND_BW")),
-            Cell::from(format!("BW_LOSS")),
-            Cell::from(format!("ERR_CNT")),
-            Cell::from(format!("ERR_STR")),
+            Cell::from("PT"),
+            Cell::from("STATE"),
+            Cell::from("NODE"),
+            Cell::from("RECV_BW"),
+            Cell::from("SEND_BW"),
+            Cell::from("BW_LOSS"),
+            Cell::from("ERR_CNT"),
+            Cell::from("ERR_STR"),
         ];
 
         let header = Row::new(header_cells).style(
@@ -520,6 +524,7 @@ impl App {
             Constraint::Length(widths[5] as u16),
             Constraint::Length(widths[6] as u16),
             Constraint::Length(widths[7] as u16),
+            Constraint::Length(widths[8] as u16),
         ];
 
         let table = Table::new(rows, constraints).header(header);

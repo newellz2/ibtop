@@ -92,6 +92,7 @@ pub fn read_scope_file(path: &str) -> Vec<Node> {
         let port = Port {
             number: port_number,
             remote_node_description: remote_node_description,
+            link_state: "Unknown".to_string(),
         };
 
         // Add port to existing node or create new node

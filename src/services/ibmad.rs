@@ -126,8 +126,7 @@ impl DiscoverService for IbmadDiscoveryService {
             tid: 1,
         };
 
-        // This project targets NVLink-style fabrics; use the NVLink-specific traversal.
-        if let Err(e) = fabric.seq_discover_nvlink() {
+        if let Err(e) = fabric.seq_discover() {
             error!("Error discovering fabric: {e}");
             return nodes;
         }
@@ -208,6 +207,7 @@ impl DiscoverService for IbmadDiscoveryService {
                             Some(Port {
                                 number: port_ref.number as i32,
                                 remote_node_description: remote_desc,
+                                link_state: format!("{:?}", port_ref.link_state),
                             })
                         })
                         .collect();
@@ -288,6 +288,7 @@ impl CountersService for IbmadCountersService {
         let hca_name = self.config.hca.clone();
         let timeout = self.config.timeout;
         let retries = self.config.retries;
+        let pkey = self.config.pkey;
 
         // Get HCA (to create ports in threads)
         let hca = match ibmad::ca::get_ca(&hca_name) {
@@ -333,6 +334,7 @@ impl CountersService for IbmadCountersService {
                         retries,
                         lp.lid,
                         lp.number as u8,
+                        pkey as u16
                     );
                     let end = Utc::now();
 

@@ -42,6 +42,7 @@ pub struct Node {
 pub struct Port {
     pub number: i32,
     pub remote_node_description: String,
+    pub link_state: String,
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +109,7 @@ impl DiscoverService for TestDiscoverService {
                 ports.push(Port {
                     number: port_num as i32,
                     remote_node_description: "".to_string(),
+                    link_state: "Active".to_string(),
                 });
             }
 
