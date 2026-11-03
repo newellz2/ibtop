@@ -10,34 +10,42 @@ pub mod scope;
 pub mod services;
 pub mod ui;
 
+/// Every option can also be set via an `IBTOP_*` environment variable (shown
+/// in `--help`); an explicit command-line flag wins over the environment.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Args {
-    #[arg(long)]
+    #[arg(long, env = "IBTOP_HCA")]
     pub hca: String,
 
-    #[arg(long, default_value_t = 0)]
-    pub pkey: u32,
+    /// P_Key table *index* (not a P_Key value) for PerfMgt queries.
+    #[arg(long, alias = "pkey", env = "IBTOP_PKEY_INDEX", default_value_t = 0)]
+    pub pkey_index: u16,
 
-    #[arg(long, default_value_t = 16)]
+    /// Worker threads (each with its own UMAD fd) for counter queries.
+    #[arg(long, env = "IBTOP_THREADS", default_value_t = 16)]
     pub threads: usize,
 
-    #[arg(long, default_value = "ibmad")]
+    #[arg(long, env = "IBTOP_SERVICE_TYPE", default_value = "ibmad")]
     pub service_type: String,
 
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, env = "IBTOP_UPDATE_INTERVAL", default_value_t = 2)]
     pub update_interval: usize,
 
-    #[arg(long, default_value_t = 250)]
+    #[arg(long, env = "IBTOP_TIMEOUT", default_value_t = 250)]
     pub timeout: u32,
 
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, env = "IBTOP_RETRIES", default_value_t = 2)]
     pub retries: u32,
 
-    #[arg(long, default_value_t = false)]
+    #[arg(long, env = "IBTOP_INCLUDE_HCAS", default_value_t = false)]
     pub include_hcas: bool,
 
-    #[arg(long)]
+    /// Service level (0-15) for PerfMgt counter queries to switches and HCAs.
+    #[arg(long, env = "IBTOP_SL", default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=15))]
+    pub sl: u8,
+
+    #[arg(long, env = "IBTOP_SCOPE_FILE")]
     pub scope_file: Option<String>,
 
     #[arg(long, default_value_t = false)]

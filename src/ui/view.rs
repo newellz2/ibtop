@@ -423,10 +423,9 @@ impl App {
         let mut node_info: Vec<(i32, String, String, f64, f64, f64, u128, String)> = Vec::new();
         if let Some(selected) = &self.selected_node {
             if let Some(n) = self.nodes.iter().find(|n| n.guid == selected.0) {
-                let lid = n.lid;
                 for p in &n.ports {
                     let port = p.number;
-                    let ctrs = self.display_counters.get(&(lid, port));
+                    let ctrs = self.display_counters.get(&(p.lid, port));
                     let recv_bw = ctrs.map_or(0.0, |c| get_bw(c, "rcv_bytes", &self.counter_mode));
                     let xmt_bw = ctrs.map_or(0.0, |c| get_bw(c, "xmt_bytes", &self.counter_mode));
                     let xmit_waits =

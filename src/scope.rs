@@ -91,6 +91,7 @@ pub fn read_scope_file(path: &str) -> Vec<Node> {
         // Create the port
         let port = Port {
             number: port_number,
+            lid,
             remote_node_description: remote_node_description,
             link_state: "Unknown".to_string(),
         };
@@ -104,6 +105,8 @@ pub fn read_scope_file(path: &str) -> Vec<Node> {
                 node_description,
                 lid,
                 ports: vec![port],
+                // Scope files carry no node type; treat entries as switches.
+                is_ca: false,
             });
     }
 
