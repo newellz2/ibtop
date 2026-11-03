@@ -36,11 +36,18 @@ pub struct Node {
     pub node_description: String,
     pub ports: Vec<Port>,
     pub lid: u16,
+    /// True for channel adapters (HCAs / NVLink GPUs). CA PMAs generally
+    /// don't support AllPortSelect (port 255), and every CA port has its own
+    /// LID, so CA counters are queried per port and summed client-side.
+    pub is_ca: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct Port {
     pub number: i32,
+    /// LID to address this port's PMA at: the switch LID for switch ports,
+    /// the port's own LID for CA ports (0 if unassigned).
+    pub lid: u16,
     pub remote_node_description: String,
     pub link_state: String,
 }
@@ -108,6 +115,7 @@ impl DiscoverService for TestDiscoverService {
             for port_num in 0..self.ports_per_node {
                 ports.push(Port {
                     number: port_num as i32,
+                    lid: 16 + i as u16,
                     remote_node_description: "".to_string(),
                     link_state: "Active".to_string(),
                 });
@@ -118,6 +126,7 @@ impl DiscoverService for TestDiscoverService {
                 node_description: format!("switch-{i}"),
                 ports,
                 lid: 16 + i as u16,
+                is_ca: false,
             });
         }
 

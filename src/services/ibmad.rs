@@ -5,10 +5,13 @@ use crate::{
 };
 use chrono::Utc;
 use ibmad::mad;
-use rayon::prelude::*;
 use std::{
     collections::HashMap,
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc::{Receiver, Sender},
+    },
 };
 use tracing::{error, warn};
 
@@ -108,23 +111,9 @@ impl DiscoverService for IbmadDiscoveryService {
             }
         };
 
-        // Create fabric and discover
-        let mut fabric = ibmad::discovery::Fabric {
-            port,
-            agent_id,
-            node_map: HashMap::new(),
-            nodes: Vec::new(),
-            switches: Vec::new(),
-            hcas: Vec::new(),
-            dr_paths: HashMap::new(),
-            ni_timings: Vec::new(),
-            retries: self.config.retries,
-            timeout: self.config.timeout,
-            mad_errors: 0,
-            mad_timeouts: 0,
-            mads_sent: 0,
-            tid: 1,
-        };
+        // Create fabric and discover (no hop limit: sweep the whole fabric).
+        let mut fabric =
+            ibmad::discovery::Fabric::new(port, agent_id, self.config.timeout, self.config.retries);
 
         if let Err(e) = fabric.seq_discover() {
             error!("Error discovering fabric: {e}");
@@ -170,57 +159,67 @@ impl DiscoverService for IbmadDiscoveryService {
                 Err(_) => continue,
             };
 
-            match node_ref.node_type {
+            let is_ca = match node_ref.node_type {
                 ibmad::enums::IbNodeType::CA => {
-                    if self.config.include_hcas {
-                        nodes.push(Node {
-                            guid: node_ref.node_guid,
-                            node_description: node_ref.description.clone().unwrap_or_default(),
-                            ports: Vec::new(),
-                            lid: node_ref.lid,
-                        });
+                    if !self.config.include_hcas {
+                        continue;
                     }
+                    true
                 }
-                ibmad::enums::IbNodeType::Switch => {
-                    let ports: Vec<Port> = node_ref
-                        .ports
-                        .iter()
-                        .filter_map(|port_arc| {
-                            let port_ref = port_arc.read().ok()?;
+                ibmad::enums::IbNodeType::Switch => false,
+                _ => continue,
+            };
 
-                            // Skip port 0 (management port) and inactive ports
-                            // Only include ports that are Active or Init state
-                            if port_ref.number == 0 {
-                                return None;
-                            }
-                            if port_ref.link_state != ibmad::enums::IbPortLinkLayerState::Active
-                                && port_ref.link_state != ibmad::enums::IbPortLinkLayerState::Init
-                            {
-                                return None;
-                            }
+            let ports: Vec<Port> = node_ref
+                .ports
+                .iter()
+                .filter_map(|port_arc| {
+                    let port_ref = port_arc.read().ok()?;
 
-                            let remote_desc = port_connections
-                                .get(&(node_ref.node_guid, port_ref.number))
-                                .cloned()
-                                .unwrap_or_default();
+                    // Skip port 0 (switch management port) and inactive ports.
+                    // Only include ports that are Active or Init state.
+                    if port_ref.number == 0 {
+                        return None;
+                    }
+                    if port_ref.link_state != ibmad::enums::IbPortLinkLayerState::Active
+                        && port_ref.link_state != ibmad::enums::IbPortLinkLayerState::Init
+                    {
+                        return None;
+                    }
 
-                            Some(Port {
-                                number: port_ref.number as i32,
-                                remote_node_description: remote_desc,
-                                link_state: format!("{:?}", port_ref.link_state),
-                            })
-                        })
-                        .collect();
+                    let remote_desc = port_connections
+                        .get(&(node_ref.node_guid, port_ref.number))
+                        .cloned();
 
-                    nodes.push(Node {
-                        guid: node_ref.node_guid,
-                        node_description: node_ref.description.clone().unwrap_or_default(),
-                        ports,
-                        lid: node_ref.lid,
-                    });
-                }
-                _ => {}
-            }
+                    // CA ports (GPUs on NVLink) are only reachable for
+                    // counters when they're cabled to a switch we discovered;
+                    // e.g. a GPU's links to other NVLink trays' ASICs don't
+                    // answer PMA queries from here. Discovery only links a
+                    // CA port to a partner when it faces a discovered switch,
+                    // so drop the unlinked ones instead of timing out on them.
+                    if is_ca && remote_desc.is_none() {
+                        return None;
+                    }
+                    let remote_desc = remote_desc.unwrap_or_default();
+
+                    Some(Port {
+                        number: port_ref.number as i32,
+                        // Switch ports share the switch's port-0 LID; each CA
+                        // port has its own LID from its PortInfo.
+                        lid: if is_ca { port_ref.lid } else { node_ref.lid },
+                        remote_node_description: remote_desc,
+                        link_state: format!("{:?}", port_ref.link_state),
+                    })
+                })
+                .collect();
+
+            nodes.push(Node {
+                guid: node_ref.node_guid,
+                node_description: node_ref.description.clone().unwrap_or_default(),
+                ports,
+                lid: node_ref.lid,
+                is_ca,
+            });
         }
 
         nodes
@@ -288,7 +287,8 @@ impl CountersService for IbmadCountersService {
         let hca_name = self.config.hca.clone();
         let timeout = self.config.timeout;
         let retries = self.config.retries;
-        let pkey = self.config.pkey;
+        let pkey_index = self.config.pkey_index;
+        let sl = self.config.sl;
 
         // Get HCA (to create ports in threads)
         let hca = match ibmad::ca::get_ca(&hca_name) {
@@ -299,107 +299,139 @@ impl CountersService for IbmadCountersService {
             }
         };
 
-        lid_ports
-            .into_par_iter()
-            .map_init(
-                || {
-                    // Init: open port and register agent per thread
-                    match ibmad::mad::open_port(&hca) {
-                        Ok(mut p) => {
-                            match ibmad::mad::register_agent(
-                                &mut p,
-                                ibmad::mad::IB_MGMT_CLASS_PERFORMANCE,
-                            ) {
-                                Ok(id) => Some((p, id)),
-                                Err(e) => {
-                                    error!("Failed to register perf agent in thread: {e}");
-                                    None
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to open MAD port in thread: {e}");
-                            None
-                        }
-                    }
-                },
-                |state, lp| {
-                    let (port, agent_id) = state.as_mut()?;
+        // `--threads` workers pull from a shared queue. Each opens one UMAD
+        // fd and registers one PerfMgt agent for the whole refresh, so a slow
+        // or dead target only stalls the worker that drew it.
+        let workers = self.config.threads.max(1).min(lid_ports.len().max(1));
+        let next = AtomicUsize::new(0);
+        let results: Mutex<HashMap<(u16, i32), HashMap<String, u64>>> =
+            Mutex::new(HashMap::with_capacity(lid_ports.len()));
 
-                    let start = Utc::now();
-                    let res = mad::query_port_counters_extended(
-                        port,
-                        *agent_id,
-                        timeout,
-                        retries,
-                        lp.lid,
-                        lp.number as u8,
-                        pkey as u16
-                    );
-                    let end = Utc::now();
-
-                    let perf_mad = match res {
-                        Ok(mad) => mad,
+        std::thread::scope(|s| {
+            for _ in 0..workers {
+                s.spawn(|| {
+                    let mut port = match ibmad::mad::open_port(&hca) {
+                        Ok(p) => p,
                         Err(e) => {
-                            // Log the error but continue
-                            tracing::debug!(
-                                "Failed to query counters for LID {} Port {}: {e}",
-                                lp.lid,
-                                lp.number
-                            );
-                            return None;
+                            error!("Failed to open MAD port in counters worker: {e}");
+                            return;
+                        }
+                    };
+                    let agent_id = match ibmad::mad::register_agent(
+                        &mut port,
+                        ibmad::mad::IB_MGMT_CLASS_PERFORMANCE,
+                    ) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            error!("Failed to register perf agent in counters worker: {e}");
+                            return;
                         }
                     };
 
-                    let mut perfctrs: HashMap<String, u64> = HashMap::new();
+                    let mut local = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(lp) = lid_ports.get(i) else {
+                            break;
+                        };
+                        if let Some(entry) =
+                            query_one(&mut port, agent_id, lp, timeout, retries, pkey_index, sl)
+                        {
+                            local.push(entry);
+                        }
+                    }
+                    if let Ok(mut r) = results.lock() {
+                        r.extend(local);
+                    }
+                });
+            }
+        });
 
-                    // Counters
-                    perfctrs.insert("xmt_bytes".to_string(), perf_mad.port_xmit_data());
-                    perfctrs.insert("rcv_bytes".to_string(), perf_mad.port_rcv_data());
-                    perfctrs.insert("xmit_waits".to_string(), perf_mad.port_xmit_wait());
-
-                    // Errors
-                    perfctrs.insert("symbol_errors".to_string(), perf_mad.symbol_error_counter());
-                    perfctrs.insert(
-                        "link_recovers".to_string(),
-                        perf_mad.link_error_recovery_counter(),
-                    );
-                    perfctrs.insert("link_downed".to_string(), perf_mad.link_downed_counter());
-                    perfctrs.insert("rcv_errors".to_string(), perf_mad.port_rcv_errors());
-                    perfctrs.insert(
-                        "phys_rcv_errors".to_string(),
-                        perf_mad.port_rcv_remote_physical_errors(),
-                    );
-                    perfctrs.insert(
-                        "switch_rel_errors".to_string(),
-                        perf_mad.port_rcv_switch_relay_errors(),
-                    );
-                    perfctrs.insert(
-                        "excess_overrun_errors".to_string(),
-                        perf_mad.excessive_buffer_overrun_errors(),
-                    );
-                    perfctrs.insert("vl15dropped".to_string(), perf_mad.vl15_dropped());
-                    perfctrs.insert("qp1_drops".to_string(), perf_mad.qp1_dropped());
-
-                    // Additional
-                    perfctrs.insert("xmit_discards".to_string(), perf_mad.port_xmit_discards());
-                    perfctrs.insert("xmit_pkts".to_string(), perf_mad.port_xmit_pkts());
-                    perfctrs.insert("rcv_pkts".to_string(), perf_mad.port_rcv_pkts());
-
-                    // Timestamps
-                    perfctrs.insert(
-                        "start_timestamp".to_string(),
-                        start.timestamp_nanos_opt().unwrap_or(0) as u64,
-                    );
-                    perfctrs.insert(
-                        "end_timestamp".to_string(),
-                        end.timestamp_nanos_opt().unwrap_or(0) as u64,
-                    );
-
-                    Some(((lp.lid, lp.number), perfctrs))
-                },
-            )
-            .filter_map(|x| x)
-            .collect()
+        results.into_inner().unwrap_or_default()
     }
+}
+
+/// Query PortCountersExtended for one LID/port and flatten it into the
+/// counter map the UI consumes. `None` on any failure (logged at debug).
+fn query_one(
+    port: &mut mad::IbMadPort,
+    agent_id: u32,
+    lp: &LidPort,
+    timeout: u32,
+    retries: u32,
+    pkey_index: u16,
+    sl: u8,
+) -> Option<((u16, i32), HashMap<String, u64>)> {
+    let start = Utc::now();
+    let res = mad::query_port_counters_extended(
+        port,
+        agent_id,
+        timeout,
+        retries,
+        lp.lid,
+        lp.number as u8,
+        pkey_index,
+        sl,
+    );
+    let end = Utc::now();
+
+    let perf_mad = match res {
+        Ok(mad) => mad,
+        Err(e) => {
+            // Log the error but continue
+            tracing::debug!(
+                "Failed to query counters for LID {} Port {}: {e}",
+                lp.lid,
+                lp.number
+            );
+            return None;
+        }
+    };
+
+    let mut perfctrs: HashMap<String, u64> = HashMap::new();
+
+    // Counters
+    perfctrs.insert("xmt_bytes".to_string(), perf_mad.port_xmit_data());
+    perfctrs.insert("rcv_bytes".to_string(), perf_mad.port_rcv_data());
+    perfctrs.insert("xmit_waits".to_string(), perf_mad.port_xmit_wait());
+
+    // Errors
+    perfctrs.insert("symbol_errors".to_string(), perf_mad.symbol_error_counter());
+    perfctrs.insert(
+        "link_recovers".to_string(),
+        perf_mad.link_error_recovery_counter(),
+    );
+    perfctrs.insert("link_downed".to_string(), perf_mad.link_downed_counter());
+    perfctrs.insert("rcv_errors".to_string(), perf_mad.port_rcv_errors());
+    perfctrs.insert(
+        "phys_rcv_errors".to_string(),
+        perf_mad.port_rcv_remote_physical_errors(),
+    );
+    perfctrs.insert(
+        "switch_rel_errors".to_string(),
+        perf_mad.port_rcv_switch_relay_errors(),
+    );
+    perfctrs.insert(
+        "excess_overrun_errors".to_string(),
+        perf_mad.excessive_buffer_overrun_errors(),
+    );
+    perfctrs.insert("vl15dropped".to_string(), perf_mad.vl15_dropped());
+    perfctrs.insert("qp1_drops".to_string(), perf_mad.qp1_dropped());
+
+    // Additional
+    perfctrs.insert("xmit_discards".to_string(), perf_mad.port_xmit_discards());
+    perfctrs.insert("xmit_pkts".to_string(), perf_mad.port_xmit_pkts());
+    perfctrs.insert("rcv_pkts".to_string(), perf_mad.port_rcv_pkts());
+
+    // Timestamps
+    perfctrs.insert(
+        "start_timestamp".to_string(),
+        start.timestamp_nanos_opt().unwrap_or(0) as u64,
+    );
+    perfctrs.insert(
+        "end_timestamp".to_string(),
+        end.timestamp_nanos_opt().unwrap_or(0) as u64,
+    );
+
+    Some(((lp.lid, lp.number), perfctrs))
 }

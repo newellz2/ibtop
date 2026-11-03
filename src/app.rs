@@ -5,7 +5,6 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use config::Config;
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
@@ -57,17 +56,36 @@ pub enum Popup {
     Details,
 }
 
-#[derive(Debug, Default, serde::Deserialize, PartialEq, Clone)]
+#[derive(Debug, Default, PartialEq, Clone)]
 pub struct AppConfig {
     pub hca: String,
-    pub pkey: u32,
+    pub pkey_index: u16,
     pub threads: usize,
     pub service_type: String,
     pub update_interval: usize,
     pub include_hcas: bool,
+    pub sl: u8,
     pub timeout: u32,
     pub retries: u32,
     pub scope_file: Option<String>,
+}
+
+impl From<Args> for AppConfig {
+    /// Clap already merged flags, `IBTOP_*` env vars and defaults.
+    fn from(args: Args) -> Self {
+        AppConfig {
+            hca: args.hca,
+            pkey_index: args.pkey_index,
+            threads: args.threads,
+            service_type: args.service_type,
+            update_interval: args.update_interval,
+            include_hcas: args.include_hcas,
+            sl: args.sl,
+            timeout: args.timeout,
+            retries: args.retries,
+            scope_file: args.scope_file,
+        }
+    }
 }
 
 // Main application state.
@@ -86,6 +104,10 @@ pub struct App {
     pub baseline_counters: HashMap<(u16, i32), HashMap<String, u64>>,
 
     pub pending_counter_update: bool,
+    /// Nodes in the last request that were skipped because they have no LID
+    /// (e.g. a switch whose port-0 PortInfo timed out). They stay in the
+    /// table, but LID-routed PerfMgt queries can't reach them.
+    pub no_lid_nodes: usize,
     pub update_start_time: Option<DateTime<Utc>>,
     pub last_counter_update: Option<DateTime<Utc>>,
     pub counter_mode: CounterMode,
@@ -132,26 +154,7 @@ pub type MainNodeInfo = (u64, u16, String, u16, f64, f64, f64, u128, String);
 impl App {
     ///  Constructor
     pub fn new(args: Args) -> Self {
-        let app_config: AppConfig = Config::builder()
-            .add_source(
-                config::Environment::with_prefix("IBTOP")
-                    .try_parsing(true)
-                    .separator("_")
-                    .list_separator(" "),
-            )
-            .build()
-            .and_then(|c| c.try_deserialize())
-            .unwrap_or_else(|_| AppConfig {
-                hca: args.hca,
-                timeout: args.timeout,
-                retries: args.retries,
-                threads: args.threads,
-                pkey: args.pkey,
-                update_interval: args.update_interval,
-                include_hcas: args.include_hcas,
-                service_type: args.service_type,
-                scope_file: args.scope_file,
-            });
+        let app_config = AppConfig::from(args);
 
         let mut app = App {
             config: app_config.clone(),
@@ -166,6 +169,7 @@ impl App {
             previous_counters: HashMap::new(),
             baseline_counters: HashMap::new(),
             pending_counter_update: false,
+            no_lid_nodes: 0,
             update_start_time: None,
             counter_mode: CounterMode::Whole,
             last_counter_update: None,
@@ -578,9 +582,10 @@ impl App {
                 self.set_selected_node_guid();
 
                 if self.selected_node.is_some() {
+                    // Only the view is reset. The per-port sample store is
+                    // kept so the popup's first Delta refresh already has a
+                    // previous sample to diff against.
                     self.display_counters.clear();
-                    self.current_counters.clear();
-                    self.previous_counters.clear();
                     self.popup_table_offset = 0;
                     self.popup_selected = 0;
                     self.active_popup = Popup::Details;
@@ -620,103 +625,97 @@ impl App {
             return;
         }
 
-        self.status = "Updating counters...".into();
+        let selected = match (&self.active_popup, &self.selected_node) {
+            (Popup::Details, Some(sel)) => self.nodes.iter().find(|n| n.guid == sel.0),
+            _ => None,
+        };
+
+        // LID-0 nodes stay in the table but get no PerfMgt queries: there's
+        // no LID to route them to. `per_port_targets` already drops ports
+        // without a LID (which covers every port of a LID-0 switch).
+        let (lid_ports, no_lid_nodes): (Vec<LidPort>, usize) = match selected {
+            Some(node) => {
+                let targets = per_port_targets(node);
+                if targets.is_empty() {
+                    self.status = format!(
+                        "{}: no LID assigned, not polling counters",
+                        node.node_description
+                    );
+                    return;
+                }
+                self.status = node.node_description.clone();
+                (targets, 0)
+            }
+            None => {
+                let mut no_lid = 0;
+                let mut targets = Vec::new();
+                for n in &self.nodes {
+                    let node_targets = if n.is_ca {
+                        // CA PMAs don't do AllPortSelect; query each port and
+                        // aggregate in handle_counters_update.
+                        per_port_targets(n)
+                    } else if n.lid != 0 {
+                        vec![LidPort {
+                            lid: n.lid,
+                            number: AGG_COUNTERS_PORT,
+                        }]
+                    } else {
+                        Vec::new()
+                    };
+                    if node_targets.is_empty() {
+                        no_lid += 1;
+                    }
+                    targets.extend(node_targets);
+                }
+                self.status = "Updating counters...".into();
+                (targets, no_lid)
+            }
+        };
+
+        self.no_lid_nodes = no_lid_nodes;
         self.pending_counter_update = true;
         self.update_start_time = Some(Utc::now());
-
-        let lid_ports: Vec<LidPort> = match self.active_popup {
-            Popup::Details => match &self.selected_node {
-                Some(node) => {
-                    let node_option = self.nodes.iter().find(|n| n.guid == node.0);
-
-                    match node_option {
-                        Some(node) => {
-                            self.status = node.node_description.clone();
-
-                            let lid = node.lid;
-                            node.ports
-                                .iter()
-                                .map(|p| LidPort {
-                                    lid,
-                                    number: p.number,
-                                })
-                                .collect()
-                        }
-                        None => self
-                            .nodes
-                            .iter()
-                            .map(|n| LidPort {
-                                lid: n.lid,
-                                number: AGG_COUNTERS_PORT,
-                            })
-                            .collect(),
-                    }
-                }
-                None => self
-                    .nodes
-                    .iter()
-                    .map(|n| LidPort {
-                        lid: n.lid,
-                        number: AGG_COUNTERS_PORT,
-                    })
-                    .collect(),
-            },
-            // Everything else
-            _ => self
-                .nodes
-                .iter()
-                .map(|n| LidPort {
-                    lid: n.lid,
-                    number: AGG_COUNTERS_PORT,
-                })
-                .collect(),
-        };
 
         self.events
             .send(AppEvent::Counters(CounterEvent::Request(lid_ports)));
     }
 
     /// Populate the counters
+    ///
+    /// `current_counters` is a running store of the latest raw sample for
+    /// every (lid, port) ever answered; `previous_counters` is that store as
+    /// it was before this response. Deltas are taken per (lid, port) against
+    /// the last sample *of that same key*, so a target that missed a refresh
+    /// (or was last polled from the other view) diffs against its own last
+    /// sample over the real elapsed time, instead of being shown as a
+    /// lifetime total. Keys with no earlier sample are left blank for one
+    /// refresh. CA totals are summed from the per-port results afterwards,
+    /// so a GPU port dropping out can't look like a counter reset.
     fn handle_counters_update(&mut self, counters: HashMap<(u16, i32), HashMap<String, u64>>) {
-        self.previous_counters = std::mem::take(&mut self.current_counters);
-        self.current_counters = counters;
-
-        match self.counter_mode {
-            CounterMode::Whole => {
-                // Just replace the entire map
-                self.display_counters = self.current_counters.clone();
-                self.status = format!("Updated counters ({})", self.display_counters.len());
-            }
-            CounterMode::Delta => {
-                self.display_counters.clear();
-                // For each LID in the incoming counters, mutate the old counters in place
-                for (lid, new_map) in &self.current_counters {
-                    if let Some(old_map) = self.previous_counters.get_mut(&lid) {
-                        let delta = calc_counters_delta(old_map, &new_map);
-                        self.display_counters.insert(*lid, delta);
-                    } else {
-                        // If we had no previous entry for that LID, just insert the new one
-                        self.display_counters.insert(*lid, new_map.clone());
-                    }
-                }
-
-                self.status = format!("Updated counters ({})", self.current_counters.len());
-            }
-            CounterMode::Baseline => {
-                self.display_counters.clear();
-                for (lid, new_map) in &self.current_counters {
-                    if let Some(old_map) = self.baseline_counters.get_mut(&lid) {
-                        let delta = calc_counters_delta(&old_map, &new_map);
-                        self.display_counters.insert(*lid, delta);
-                    } else {
-                        // If we had no previous entry for that LID, just insert the new one
-                        self.display_counters.insert(*lid, new_map.clone());
-                    }
-                }
-                self.status = format!("Updated counters ({})", self.current_counters.len());
-            }
+        self.previous_counters = self.current_counters.clone();
+        for (key, sample) in &counters {
+            self.current_counters.insert(*key, sample.clone());
         }
 
+        let mut display = match self.counter_mode {
+            CounterMode::Whole => counters.clone(),
+            CounterMode::Delta => deltas_against(&self.previous_counters, &counters),
+            CounterMode::Baseline => deltas_against(&self.baseline_counters, &counters),
+        };
+        aggregate_ca_counters(&self.nodes, &mut display);
+
+        let mut status = format!("Updated counters ({})", counters.len());
+        if !counters.is_empty() && display.is_empty() {
+            status.push_str(", collecting first sample for deltas");
+        }
+        if self.no_lid_nodes > 0 {
+            status.push_str(&format!(
+                ", {} node(s) without LID not polled",
+                self.no_lid_nodes
+            ));
+        }
+        self.status = status;
+        self.display_counters = display;
         self.pending_counter_update = false;
     }
 
@@ -853,6 +852,68 @@ impl App {
     }
 }
 
+/// One counter query per port of `node`, each addressed to that port's LID.
+/// Ports without an assigned LID (e.g. still in Init) can't be queried.
+fn per_port_targets(node: &Node) -> Vec<LidPort> {
+    node.ports
+        .iter()
+        .filter(|p| p.lid != 0)
+        .map(|p| LidPort {
+            lid: p.lid,
+            number: p.number,
+        })
+        .collect()
+}
+
+/// CA nodes are queried per port; sum their port counters into the
+/// `(node.lid, AGG_COUNTERS_PORT)` entry the main table reads. Timestamps are
+/// combined as earliest start / latest end so rate math still works.
+fn aggregate_ca_counters(
+    nodes: &[Node],
+    counters: &mut HashMap<(u16, i32), HashMap<String, u64>>,
+) {
+    // A LID-0 CA has no unique key to aggregate under; several of them would
+    // collide on (0, AGG_COUNTERS_PORT).
+    for n in nodes.iter().filter(|n| n.is_ca && n.lid != 0) {
+        let mut agg: HashMap<String, u64> = HashMap::new();
+        for p in &n.ports {
+            let Some(port_ctrs) = counters.get(&(p.lid, p.number)) else {
+                continue;
+            };
+            for (k, &v) in port_ctrs {
+                let entry = agg.entry(k.clone());
+                match k.as_str() {
+                    "start_timestamp" => {
+                        entry.and_modify(|e| *e = (*e).min(v)).or_insert(v);
+                    }
+                    "end_timestamp" => {
+                        entry.and_modify(|e| *e = (*e).max(v)).or_insert(v);
+                    }
+                    _ => {
+                        entry.and_modify(|e| *e = e.saturating_add(v)).or_insert(v);
+                    }
+                }
+            }
+        }
+        if !agg.is_empty() {
+            counters.insert((n.lid, AGG_COUNTERS_PORT), agg);
+        }
+    }
+}
+
+/// Per-key deltas of `new` against `base`, omitting keys `base` has never seen.
+fn deltas_against(
+    base: &HashMap<(u16, i32), HashMap<String, u64>>,
+    new: &HashMap<(u16, i32), HashMap<String, u64>>,
+) -> HashMap<(u16, i32), HashMap<String, u64>> {
+    new.iter()
+        .filter_map(|(key, new_map)| {
+            base.get(key)
+                .map(|old_map| (*key, calc_counters_delta(old_map, new_map)))
+        })
+        .collect()
+}
+
 /// Calculate the delta between two counter maps.
 ///
 /// This function computes the difference between new and old counter values.
@@ -878,4 +939,116 @@ fn calc_counters_delta(
     }
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::lib::Port;
+
+    fn port(number: i32, lid: u16) -> Port {
+        Port {
+            number,
+            lid,
+            remote_node_description: String::new(),
+            link_state: "Active".into(),
+        }
+    }
+
+    fn ctrs(pairs: &[(&str, u64)]) -> HashMap<String, u64> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    fn gpu() -> Node {
+        Node {
+            guid: 1,
+            node_description: "gpu".into(),
+            // Port 3 is Init with no LID yet.
+            ports: vec![port(1, 100), port(2, 101), port(3, 0)],
+            lid: 100,
+            is_ca: true,
+        }
+    }
+
+    #[test]
+    fn per_port_targets_uses_port_lids_and_skips_unassigned() {
+        let t = per_port_targets(&gpu());
+        let got: Vec<(u16, i32)> = t.iter().map(|lp| (lp.lid, lp.number)).collect();
+        assert_eq!(got, vec![(100, 1), (101, 2)]);
+    }
+
+    #[test]
+    fn aggregate_sums_ca_ports_and_merges_timestamps() {
+        let nodes = vec![gpu()];
+        let mut c = HashMap::new();
+        c.insert(
+            (100, 1),
+            ctrs(&[("xmt_bytes", 10), ("link_downed", 1), ("start_timestamp", 50), ("end_timestamp", 60)]),
+        );
+        c.insert(
+            (101, 2),
+            ctrs(&[("xmt_bytes", 5), ("link_downed", 2), ("start_timestamp", 40), ("end_timestamp", 70)]),
+        );
+
+        aggregate_ca_counters(&nodes, &mut c);
+
+        let agg = &c[&(100, AGG_COUNTERS_PORT)];
+        assert_eq!(agg["xmt_bytes"], 15);
+        assert_eq!(agg["link_downed"], 3);
+        assert_eq!(agg["start_timestamp"], 40);
+        assert_eq!(agg["end_timestamp"], 70);
+        // Per-port entries are left intact for the Details view.
+        assert_eq!(c[&(101, 2)]["xmt_bytes"], 5);
+    }
+
+    #[test]
+    fn deltas_skip_keys_without_a_previous_sample() {
+        let mut base = HashMap::new();
+        base.insert((7, 1), ctrs(&[("link_downed", 5), ("end_timestamp", 1_000)]));
+        let mut new = HashMap::new();
+        new.insert((7, 1), ctrs(&[("link_downed", 6), ("end_timestamp", 3_000)]));
+        // Never sampled before: must not show its lifetime total as a delta.
+        new.insert((8, 1), ctrs(&[("link_downed", 500), ("end_timestamp", 3_000)]));
+
+        let d = deltas_against(&base, &new);
+
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[&(7, 1)]["link_downed"], 1);
+        assert_eq!(d[&(7, 1)]["end_timestamp"], 2_000);
+    }
+
+    #[test]
+    fn ca_total_delta_unaffected_by_a_port_missing_a_refresh() {
+        // Delta per port first, then sum: a GPU port that drops out for one
+        // refresh just contributes nothing, instead of the summed total
+        // shrinking and being mistaken for a counter reset.
+        let nodes = vec![gpu()];
+        let mut prev = HashMap::new();
+        prev.insert((100, 1), ctrs(&[("xmt_bytes", 1_000), ("end_timestamp", 10)]));
+        prev.insert((101, 2), ctrs(&[("xmt_bytes", 9_000), ("end_timestamp", 10)]));
+        let mut new = HashMap::new();
+        new.insert((100, 1), ctrs(&[("xmt_bytes", 1_100), ("end_timestamp", 20)]));
+        // (101, 2) didn't answer this time.
+
+        let mut display = deltas_against(&prev, &new);
+        aggregate_ca_counters(&nodes, &mut display);
+
+        assert_eq!(display[&(100, AGG_COUNTERS_PORT)]["xmt_bytes"], 100);
+        assert_eq!(display[&(100, AGG_COUNTERS_PORT)]["end_timestamp"], 10);
+    }
+
+    #[test]
+    fn aggregate_skips_ca_with_no_responses_and_ignores_switches() {
+        let mut sw = gpu();
+        sw.is_ca = false;
+        sw.lid = 7;
+        let nodes = vec![gpu(), sw];
+        let mut c = HashMap::new();
+        c.insert((7, AGG_COUNTERS_PORT), ctrs(&[("xmt_bytes", 99)]));
+
+        aggregate_ca_counters(&nodes, &mut c);
+
+        assert!(!c.contains_key(&(100, AGG_COUNTERS_PORT)));
+        assert_eq!(c[&(7, AGG_COUNTERS_PORT)]["xmt_bytes"], 99);
+    }
 }
